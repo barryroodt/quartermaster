@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../../src/db/connection";
 import { migrate } from "../../src/db/migrate";
-import { applyRecords, getAll } from "../../src/inventory/indexer";
+import { applyRecords, getAll, COLS } from "../../src/inventory/indexer";
 import type { CapabilityRecord } from "../../src/inventory/types";
 
 let tmpDir: string;
@@ -58,5 +58,20 @@ describe("indexer applyRecords", () => {
     applyRecords(db, [mkRecord("foo", "kubernetes deploy helper")]);
     const hits = db.query("SELECT rowid FROM capabilities_fts WHERE capabilities_fts MATCH 'kubernetes'").all();
     expect(hits.length).toBe(1);
+  });
+
+  test("COLS matches schema column set", () => {
+    db = openDb(dbPath); migrate(db);
+    const cols = db.query("PRAGMA table_info(capabilities)").all() as { name: string }[];
+    const schemaNames = new Set(cols.map(c => c.name));
+    const colsSet = new Set<string>(COLS);
+    // Every name in COLS appears in the schema.
+    for (const c of COLS) {
+      expect(schemaNames.has(c)).toBe(true);
+    }
+    // Every schema column appears in COLS.
+    for (const name of schemaNames) {
+      expect(colsSet.has(name)).toBe(true);
+    }
   });
 });

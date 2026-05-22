@@ -6,7 +6,7 @@
 import type { Database } from "bun:sqlite";
 import type { CapabilityRecord } from "./types.ts";
 
-const COLS = [
+export const COLS = [
   "id", "source_type", "name", "canonical_name", "description", "keywords",
   "installed", "enabled", "bundle_id", "bundle_version", "bundle_path",
   "source_url", "source_sha", "last_seen_epoch", "content_hash",
