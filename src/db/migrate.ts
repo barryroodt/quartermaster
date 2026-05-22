@@ -19,6 +19,6 @@ export function migrate(db: Database): void {
   db.exec(schema);
   const v = currentVersion(db);
   if (v < TARGET_VERSION) {
-    db.query("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)").run(TARGET_VERSION, Date.now());
+    db.query("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)").run(TARGET_VERSION, Math.floor(Date.now() / 1000));
   }
 }
