@@ -9,6 +9,7 @@ export interface EnumOpts {
 }
 
 export function enumerateSkills(root: string, opts: EnumOpts = {}): CapabilityRecord[] {
+  const now = Math.floor(Date.now() / 1000);
   const out: CapabilityRecord[] = [];
   let entries: string[];
   try {
@@ -35,7 +36,7 @@ export function enumerateSkills(root: string, opts: EnumOpts = {}): CapabilityRe
       description,
       bundle_id: opts.pluginSlug ?? null,
       bundle_path: join(root, entry),
-      last_seen_epoch: Math.floor(Date.now() / 1000),
+      last_seen_epoch: now,
       content_hash: contentHash(description, null),
     }));
   }

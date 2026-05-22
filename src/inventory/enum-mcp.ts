@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import { contentHash } from "./hash.ts";
 import { buildRecord, type CapabilityRecord } from "./types.ts";
 
-export type ToolsListFetcher = (serverName: string, config: unknown) => Promise<Array<{ name: string; description?: string }>>;
+export interface McpTool {
+  name: string;
+  description?: string;
+}
+
+export type ToolsListFetcher = (serverName: string, config: unknown) => Promise<McpTool[]>;
 
 function configHash(cfg: unknown): string {
   return createHash("sha1").update(JSON.stringify(cfg)).digest("hex").slice(0, 12);
@@ -29,12 +34,12 @@ export async function enumerateMcp(
       content_hash: contentHash(null, null),
     }));
 
-    const cached = db.query("SELECT tools_json FROM mcp_tool_cache WHERE server_name = ? AND server_config_hash = ?")
-      .get(name, hash) as { tools_json: string } | null;
+    const cached = db.query("SELECT tools_json, server_config_hash FROM mcp_tool_cache WHERE server_name = ?")
+      .get(name) as { tools_json: string; server_config_hash: string } | null;
 
-    let tools: Array<{ name: string; description?: string }>;
+    let tools: McpTool[];
     let fetchOk = true;
-    if (cached) {
+    if (cached && cached.server_config_hash === hash) {
       tools = JSON.parse(cached.tools_json);
     } else {
       try {

@@ -29,22 +29,40 @@ function walkMd(root: string, out: string[] = []): string[] {
   return out;
 }
 
-export function enumerateCommands(root: string, opts: EnumOpts = {}): CapabilityRecord[] {
-  return walkMd(root).map((path) => {
-    const content = readFileSync(path, "utf8");
+const SEPARATOR: Record<"command" | "agent", string> = {
+  command: "/",
+  agent: ":",
+};
+
+export function enumerateMdTree(
+  root: string,
+  sourceType: "command" | "agent",
+  opts: EnumOpts = {},
+): CapabilityRecord[] {
+  const now = Math.floor(Date.now() / 1000);
+  const sep = SEPARATOR[sourceType];
+  const out: CapabilityRecord[] = [];
+  for (const path of walkMd(root)) {
+    let content: string;
+    try {
+      content = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
     const name = basename(path, ".md");
     const description = extractFromMarkdown(content);
-    const canonical = opts.pluginSlug ? `${opts.pluginSlug}/${name}` : name;
-    return buildRecord({
-      id: `command:${canonical}`,
-      source_type: "command",
+    const canonical = opts.pluginSlug ? `${opts.pluginSlug}${sep}${name}` : name;
+    out.push(buildRecord({
+      id: `${sourceType}:${canonical}`,
+      source_type: sourceType,
       name,
       canonical_name: canonical,
       description,
       bundle_id: opts.pluginSlug ?? null,
       bundle_path: path,
-      last_seen_epoch: Math.floor(Date.now() / 1000),
+      last_seen_epoch: now,
       content_hash: contentHash(description, null),
-    });
-  });
+    }));
+  }
+  return out;
 }

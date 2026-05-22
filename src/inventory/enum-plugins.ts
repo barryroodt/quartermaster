@@ -17,6 +17,7 @@ interface Manifest {
 }
 
 export function enumeratePlugins(manifestPath: string, enabled: Set<string>): CapabilityRecord[] {
+  const now = Math.floor(Date.now() / 1000);
   let raw: string;
   try {
     raw = readFileSync(manifestPath, "utf8");
@@ -27,6 +28,7 @@ export function enumeratePlugins(manifestPath: string, enabled: Set<string>): Ca
   try {
     manifest = JSON.parse(raw);
   } catch {
+    console.warn("[quartermaster] installed_plugins.json is malformed; treating as empty");
     return [];
   }
   const out: CapabilityRecord[] = [];
@@ -50,7 +52,7 @@ export function enumeratePlugins(manifestPath: string, enabled: Set<string>): Ca
       bundle_version: entry.version,
       bundle_path: entry.installPath,
       source_sha: entry.gitCommitSha ?? null,
-      last_seen_epoch: Math.floor(Date.now() / 1000),
+      last_seen_epoch: now,
       content_hash: contentHash(description, null),
     }));
   }

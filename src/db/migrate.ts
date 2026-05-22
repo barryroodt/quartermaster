@@ -9,8 +9,9 @@ export function currentVersion(db: Database): number {
   try {
     const row = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number | null } | null;
     return row?.v ?? 0;
-  } catch {
-    return 0;
+  } catch (e) {
+    if (e instanceof Error && /no such table/.test(e.message)) return 0;
+    throw e;
   }
 }
 
