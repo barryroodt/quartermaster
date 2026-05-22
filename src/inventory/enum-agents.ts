@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { extractFromMarkdown } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { contentHash } from "./hash.ts";
+import { type CapabilityRecord } from "./types.ts";
 
 export interface EnumOpts {
   pluginSlug?: string;

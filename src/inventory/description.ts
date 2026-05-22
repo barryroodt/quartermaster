@@ -1,6 +1,6 @@
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
-function parseFrontmatter(md: string): { fm: Record<string, string>; body: string } {
+export function parseFrontmatter(md: string): { fm: Record<string, string>; body: string } {
   const m = md.match(FRONTMATTER);
   if (!m) return { fm: {}, body: md };
   const fm: Record<string, string> = {};

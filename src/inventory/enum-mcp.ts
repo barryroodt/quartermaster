@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { contentHash } from "./hash.ts";
+import { type CapabilityRecord } from "./types.ts";
 
 export type ToolsListFetcher = (serverName: string, config: unknown) => Promise<Array<{ name: string; description?: string }>>;
 

@@ -1,5 +1,10 @@
 import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { paths as appPaths } from "../paths.ts";
+
+export function contentHash(description: string | null, keywords: string | null): string {
+  return createHash("sha1").update(`${description ?? ""}\n${keywords ?? ""}`).digest("hex").slice(0, 12);
+}
 
 export function signatureHash(paths: string[]): string {
   const parts: string[] = [];
@@ -15,14 +20,13 @@ export function signatureHash(paths: string[]): string {
 }
 
 export function defaultSignatureInputs(): string[] {
-  const HOME = process.env.HOME ?? "";
   return [
-    `${HOME}/.claude/plugins/installed_plugins.json`,
-    `${HOME}/.claude/settings.json`,
-    `${HOME}/.claude.json`,
-    `${HOME}/.claude/skills`,
-    `${HOME}/.claude/commands`,
-    `${HOME}/.claude/agents`,
-    `${HOME}/.quartermaster/cli-extras.json`,
+    appPaths.claudePluginsManifest,
+    appPaths.claudeSettings,
+    appPaths.claudeJson,
+    appPaths.claudeSkills,
+    appPaths.claudeCommands,
+    appPaths.claudeAgents,
+    appPaths.cliExtras,
   ];
 }

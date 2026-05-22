@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 export type SourceType = "skill" | "plugin" | "command" | "agent" | "mcp_server" | "mcp_tool" | "cli";
 
 export interface CapabilityRecord {
@@ -18,8 +16,4 @@ export interface CapabilityRecord {
   source_sha: string | null;
   last_seen_epoch: number;
   content_hash: string;
-}
-
-export function contentHash(description: string | null, keywords: string | null): string {
-  return createHash("sha1").update(`${description ?? ""}\n${keywords ?? ""}`).digest("hex").slice(0, 12);
 }

@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractFromJson } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { contentHash } from "./hash.ts";
+import { type CapabilityRecord } from "./types.ts";
 
 interface PluginEntry {
   scope: string;

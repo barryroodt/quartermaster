@@ -1,9 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractFromMarkdown } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
-
-const FM_NAME = /^name:\s*(.+)$/m;
+import { extractFromMarkdown, parseFrontmatter } from "./description.ts";
+import { contentHash } from "./hash.ts";
+import { type CapabilityRecord } from "./types.ts";
 
 export interface EnumOpts {
   pluginSlug?: string;
@@ -25,8 +24,7 @@ export function enumerateSkills(root: string, opts: EnumOpts = {}): CapabilityRe
     } catch {
       continue;
     }
-    const m = content.match(FM_NAME);
-    const name = m?.[1].trim() ?? entry;
+    const name = parseFrontmatter(content).fm.name ?? entry;
     const description = extractFromMarkdown(content);
     const canonical = opts.pluginSlug ? `${opts.pluginSlug}:${name}` : name;
     out.push({
