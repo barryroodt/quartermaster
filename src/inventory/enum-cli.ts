@@ -1,5 +1,5 @@
 import { contentHash } from "./hash.ts";
-import { type CapabilityRecord } from "./types.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 import { which } from "../util/which.ts";
 
 export interface CliKnown {
@@ -17,23 +17,17 @@ export function enumerateCli(
   for (const [bin, meta] of Object.entries(merged)) {
     const path = which(bin);
     if (!path) continue;
-    out.push({
+    out.push(buildRecord({
       id: `cli:bin:${bin}`,
       source_type: "cli",
       name: bin,
       canonical_name: `bin:${bin}`,
       description: meta.description,
       keywords: meta.registry,
-      installed: 1,
-      enabled: null,
-      bundle_id: null,
-      bundle_version: null,
       bundle_path: path,
-      source_url: null,
-      source_sha: null,
       last_seen_epoch: now,
       content_hash: contentHash(meta.description, meta.registry),
-    });
+    }));
   }
   return out;
 }

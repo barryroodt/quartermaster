@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { extractFromMarkdown } from "./description.ts";
 import { contentHash } from "./hash.ts";
-import { type CapabilityRecord } from "./types.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 
 export interface EnumOpts {
   pluginSlug?: string;
@@ -35,22 +35,16 @@ export function enumerateCommands(root: string, opts: EnumOpts = {}): Capability
     const name = basename(path, ".md");
     const description = extractFromMarkdown(content);
     const canonical = opts.pluginSlug ? `${opts.pluginSlug}/${name}` : name;
-    return {
+    return buildRecord({
       id: `command:${canonical}`,
-      source_type: "command" as const,
+      source_type: "command",
       name,
       canonical_name: canonical,
       description,
-      keywords: null,
-      installed: 1 as const,
-      enabled: null,
       bundle_id: opts.pluginSlug ?? null,
-      bundle_version: null,
       bundle_path: path,
-      source_url: null,
-      source_sha: null,
       last_seen_epoch: Math.floor(Date.now() / 1000),
       content_hash: contentHash(description, null),
-    };
+    });
   });
 }

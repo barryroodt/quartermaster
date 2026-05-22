@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractFromJson } from "./description.ts";
 import { contentHash } from "./hash.ts";
-import { type CapabilityRecord } from "./types.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 
 interface PluginEntry {
   scope: string;
@@ -39,23 +39,20 @@ export function enumeratePlugins(manifestPath: string, enabled: Set<string>): Ca
       description = extractFromJson(pj);
     } catch {}
     const name = pluginId.split("@")[0];
-    out.push({
+    out.push(buildRecord({
       id: `plugin:${pluginId}`,
       source_type: "plugin",
       name,
       canonical_name: pluginId,
       description,
-      keywords: null,
-      installed: 1,
       enabled: enabled.has(pluginId) ? 1 : 0,
       bundle_id: pluginId,
       bundle_version: entry.version,
       bundle_path: entry.installPath,
-      source_url: null,
       source_sha: entry.gitCommitSha ?? null,
       last_seen_epoch: Math.floor(Date.now() / 1000),
       content_hash: contentHash(description, null),
-    });
+    }));
   }
   return out;
 }
