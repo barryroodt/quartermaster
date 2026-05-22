@@ -40,7 +40,7 @@ The closest existing tool is **skillless** ([github.com/0oooooooo0/skillless](ht
 |---|---|
 | Only discovers skills | Unified discovery across skills, plugins, commands, agents, MCP servers, MCP tools, and curated CLIs |
 | Shallow matching (literal grep on SKILL.md body) | FTS5 over frontmatter `description` field, then Claude rerank for semantic relevance |
-| Manual `/command` only | Passive `SessionStart` baseline + `UserPromptSubmit` planning-intent nudge + explicit `/qm survey` |
+| Manual `/command` only | `UserPromptSubmit` hook covers cold-state nudges, stale warnings, and planning-intent nudges in one passive entry point; explicit `/qm survey` for the deep pass |
 | No trust / verification layer | Allowlist of trusted sources + SHA-pin manifest with drift detection |
 | Locale-specific UX baked into prompts | Plain English; locale handled by the user's shell |
 
@@ -62,8 +62,7 @@ The closest existing tool is **skillless** ([github.com/0oooooooo0/skillless](ht
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  EVENTS                                                       │
-│  ├─ SessionStart hook ──────► baseline inventory injection    │
-│  ├─ UserPromptSubmit hook ──► intent classifier → deep pass   │
+│  ├─ UserPromptSubmit hook ──► cold-state nudge + classifier   │
 │  └─ /qm <subcommand> ──────► explicit survey / install / list │
 └──────────────────────────────────────────────────────────────┘
             │
@@ -79,8 +78,9 @@ The closest existing tool is **skillless** ([github.com/0oooooooo0/skillless](ht
             ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  STORE (~/.quartermaster/)                                    │
-│  ├─ inventory.db   (SQLite + FTS5 over name/description)     │
-│  ├─ trust.json     (allowlist + installed-SHA pins)          │
+│  ├─ inventory.db   (SQLite + FTS5; capabilities, install_     │
+│  │                  history, trust_pins, mcp_tool_cache)      │
+│  ├─ trust.json     (user-editable allowlist patterns ONLY)   │
 │  └─ inventory.hash (cache-invalidation key)                  │
 └──────────────────────────────────────────────────────────────┘
             │
@@ -111,8 +111,7 @@ The closest existing tool is **skillless** ([github.com/0oooooooo0/skillless](ht
 | Event | Indexer | Matcher | Installer | Handoff |
 |---|---|---|---|---|
 | `/qm init` (+ variants) | always | NO | NO | NO |
-| SessionStart hook | NO — checks hash and emits ⚠ stale warning only; never re-indexes from a hook | NO — just injects names | NO | NO |
-| UserPromptSubmit hook | NO (read cache) | NO (regex classifier only) | NO | NO (nudge text only) |
+| UserPromptSubmit hook | NO (reads inventory.hash for staleness flag only) | NO (regex classifier only) | NO | NO (nudge text only; covers cold-state, stale-state, and planning-intent in one entry point) |
 | `/qm survey <goal>` | refresh if stale | YES | YES (with confirms) | `EnterPlanMode(<goal>)` |
 
 **Contracts:**
@@ -146,25 +145,20 @@ CREATE TABLE capabilities (
   id              TEXT PRIMARY KEY,           -- stable: <source_type>:<canonical_name>
   source_type     TEXT NOT NULL,
   name            TEXT NOT NULL,              -- short name (display)
-  canonical_name  TEXT NOT NULL,              -- match key
+  canonical_name  TEXT NOT NULL,              -- match key (bundle_kind derivable from format)
   description     TEXT,
   keywords        TEXT,                       -- JSON array, optional
   installed       INTEGER NOT NULL,           -- 0/1
   enabled         INTEGER,                    -- 0/1/NULL (meaningful only for plugin)
 
   -- bundle metadata (nullable when leaf is standalone)
-  bundle_kind     TEXT,                       -- 'plugin' | 'marketplace' | NULL
-  bundle_id       TEXT,                       -- e.g. "claude-mem@thedotmack"
+  bundle_id       TEXT,                       -- e.g. "claude-mem@thedotmack"; kind derivable from format
   bundle_version  TEXT,
   bundle_path     TEXT,
 
-  -- provenance
+  -- provenance (trust_level derived at read time from source_url + trust.json)
   source_url      TEXT,
   source_sha      TEXT,
-  trust_level     TEXT NOT NULL,              -- 'trusted' | 'unknown' | 'untrusted'
-
-  -- invocation hint
-  invocation      TEXT,                       -- JSON: {style, example}
 
   -- index hygiene
   last_seen_epoch INTEGER NOT NULL,
@@ -184,26 +178,46 @@ CREATE TABLE install_history (
   PRIMARY KEY (capability_id, installed_at)
 );
 
+-- Pin state lives in DB (auto-managed), not in trust.json (user-editable config).
+CREATE TABLE trust_pins (
+  capability_id   TEXT PRIMARY KEY,
+  source_sha      TEXT NOT NULL,
+  pinned_at       INTEGER NOT NULL,
+  pinned_by       TEXT NOT NULL,              -- 'auto-trusted' | 'user-confirm' | 'pre-existing'
+  source_url      TEXT NOT NULL
+);
+
+-- MCP tools/list cache. Refresh trigger: server_config_hash mismatch only.
+-- No TTL — config-hash detection is sufficient; manual /qm init --refresh-mcp is the escape hatch.
 CREATE TABLE mcp_tool_cache (
   server_name        TEXT PRIMARY KEY,
   server_config_hash TEXT NOT NULL,
   tools_json         TEXT NOT NULL,
-  fetched_at         INTEGER NOT NULL,
-  ttl_epoch          INTEGER NOT NULL
+  fetched_at         INTEGER NOT NULL
 );
 ```
 
-**`invocation` JSON per source_type:**
+**Derived fields (computed at read time, not stored):**
 
-| source_type | Example |
+| Field | Derivation |
 |---|---|
-| `skill` | `{"style": "skill", "name": "superpowers:brainstorming"}` |
-| `command` | `{"style": "slash", "name": "/qm survey"}` |
-| `mcp_tool` | `{"style": "tool", "name": "mcp__context7__query-docs"}` |
-| `mcp_server` | `{"style": "server", "name": "context7", "load_tools_via": "ToolSearch"}` |
-| `agent` | `{"style": "agent", "subagent_type": "Explore"}` |
-| `cli` | `{"style": "bash", "example": "gh pr list --state open"}` |
-| `plugin` | `{"style": "install", "cmd": "claude plugin install <id>"}` |
+| `trust_level` (`trusted`/`unknown`/`blocked`) | Match `source_url` against `trust.json` patterns at query time |
+| `bundle_kind` (`plugin`/`marketplace`/null) | Parse `bundle_id` format: contains `@` → `plugin`; bare slug → `marketplace`; null → standalone |
+| `invocation` JSON | Lookup `source_type` in `INVOCATION_BY_TYPE` shape table (below); format with `canonical_name` |
+
+Storing these as columns was rejected (review finding 3): denormalised state, stale on `trust.json` edits, two write sites for one fact.
+
+**`INVOCATION_BY_TYPE` shape table (used by read-time derivation, not stored):**
+
+| source_type | Derived invocation |
+|---|---|
+| `skill` | `{"style": "skill", "name": <canonical_name>}` |
+| `command` | `{"style": "slash", "name": "/" + <canonical_name>}` |
+| `mcp_tool` | `{"style": "tool", "name": <canonical_name>}` |
+| `mcp_server` | `{"style": "server", "name": <canonical_name>, "load_tools_via": "ToolSearch"}` |
+| `agent` | `{"style": "agent", "subagent_type": <canonical_name>}` |
+| `cli` | `{"style": "bash", "example": <canonical_name without "bin:" prefix>}` |
+| `plugin` | `{"style": "install", "cmd": "claude plugin install " + <canonical_name>}` |
 
 **ID conventions (`canonical_name`):**
 
@@ -217,17 +231,13 @@ CREATE TABLE mcp_tool_cache (
 | mcp_tool | `mcp__<server>__<tool>` | `mcp__context7__query-docs` |
 | cli | `bin:<basename>` | `bin:gh` |
 
-**Description sourcing matrix:**
+**Description sourcing — one general extractor, two source-specific adapters:**
 
-| source_type | Primary | Fallback |
-|---|---|---|
-| skill | SKILL.md frontmatter `description:` | first H1 line |
-| plugin | `.claude-plugin/plugin.json` `description` | marketplace.json entry |
-| command | command-file frontmatter `description:` | first non-frontmatter line |
-| agent | agent frontmatter `description:` | none — record-but-flag |
-| mcp_server | curated map (context7 → "library docs") + `mcp/<server>/server.json` if present | server name only |
-| mcp_tool | tool schema `description` (from `tools/list` MCP call) | parent server desc + tool name |
-| cli | curated manifest | `man <bin>` whatis line; never `--help` (hang risk) |
+- **General extractor (skill, plugin, command, agent):** parse frontmatter `description:` → else first non-frontmatter line → else flag empty for `/qm init --check` to report. Single function; works for everything markdown-with-frontmatter.
+- **Adapter — `mcp_server` / `mcp_tool`:** call MCP `tools/list` against the connected server; use tool schema's `description` field. Fall back to parent-server description for tools; fall back to server name for servers with no description.
+- **Adapter — `cli`:** look up curated manifest (`cli-known.json` + `cli-extras.json`). If absent there but binary present on PATH, fall back to `whatis <bin>` (man-database lookup, no execution risk). Never `<bin> --help` (hang risk).
+
+Three code paths total, not fourteen.
 
 ---
 
@@ -253,53 +263,24 @@ CREATE TABLE mcp_tool_cache (
 | Trigger | Phase | Blocking budget | Reads | Writes |
 |---|---|---|---|---|
 | `/qm init` (+ variants) | user-explicit | unbounded (foreground) | filesystem, `claude mcp list`, PATH | `inventory.db`, `trust.json` |
-| SessionStart hook | passive | 200ms hard cap | `inventory.db`, `inventory.hash` | NONE |
-| UserPromptSubmit hook | conditional | 50ms hard cap | `inventory.hash` for staleness flag | NONE |
-| `/qm survey <goal>` | user-explicit | unbounded | inventory.db; may call Claude rerank + WebSearch | `install_history` if install consented |
+| UserPromptSubmit hook | conditional | 100ms hard cap | `inventory.hash` for staleness flag; `~/.quartermaster/.session-init-shown` for cold-state marker | session marker file on first emit |
+| `/qm survey <goal>` | user-explicit | unbounded | inventory.db; may call Claude rerank + WebSearch | `install_history`, `trust_pins` if install consented |
 
-### SessionStart hook (bash, `~/.quartermaster/hooks/session-start.sh`)
+### UserPromptSubmit hook (the only hook)
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-DB="$HOME/.quartermaster/inventory.db"
-HASH_FILE="$HOME/.quartermaster/inventory.hash"
+A single bun script is the hook entry point — no bash wrapper. The hook config in `settings.json` invokes `bun ~/.quartermaster/scripts/prompt-hook.js` directly. No SessionStart hook — baseline awareness is lazy-loaded on first prompt that needs it.
 
-# Cold install — nudge once, exit
-if [[ ! -f "$DB" ]]; then
-  echo "[quartermaster] index not built. Run /qm init to enable discovery."
-  exit 0
-fi
+The bun script handles all three cases in one pass:
 
-# Stale-check via mtime sum (cheap)
-CUR_HASH=$(stat -f%m \
-  "$HOME/.claude/plugins/installed_plugins.json" \
-  "$HOME/.claude/skills" \
-  "$HOME/.claude.json" 2>/dev/null | sha1sum | cut -c1-12)
-STORED_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "")
+1. **Cold-state check** — if `inventory.db` is absent and `.session-init-shown` marker is absent, emit the cold-state nudge and write the marker; exit.
+2. **Stale check** — stat the input-signature inputs (Section 6), compare against `inventory.hash`, set a stale flag.
+3. **Classifier + output** — apply the regex classifier (below) to the prompt; if both planning-shape and tech-keyword present, emit the nudge with installed-relevant + gap-candidate counts; append the stale warning if the flag is set.
 
-bun "$HOME/.quartermaster/scripts/baseline-context.js" \
-  --max-items 25 \
-  --stale=$([[ "$CUR_HASH" != "$STORED_HASH" ]] && echo true || echo false)
-```
+One process per hook fire. No bash subprocess fork, no shell-quoting surface on the user's prompt, one fewer file in the install footprint.
 
-### Baseline context (injected at SessionStart, <600 tokens)
+### Intent classifier (inside the hook)
 
-```
-[quartermaster] discovery index loaded. 142 capabilities indexed
-(87 skills, 21 plugins, 12 commands, 7 MCP servers, 15 CLIs).
-3 plugins disabled.
-
-Use /qm survey <goal> for ranked recommendations before planning.
-Use /qm list --source-type mcp_tool to dump a category.
-
-⚠ Inventory is stale (last built 2026-05-19, plugin manifest changed since).
-  Run /qm init to refresh.    [only shown when stale]
-```
-
-### UserPromptSubmit intent classifier
-
-Hard-coded regex + keyword match. No LLM call (50ms budget). Fires only when **both** a planning-shape AND a tech-keyword are present, to keep the false-positive rate low.
+Hard-coded regex + keyword match. No LLM call (100ms total hook budget). Fires only when **both** a planning-shape AND a tech-keyword are present, to keep the false-positive rate low.
 
 ```js
 const PLANNING_TRIGGERS = [
@@ -311,14 +292,26 @@ const PLANNING_TRIGGERS = [
 const TECH_PATTERN = /\b(react|vue|nextjs|django|fastapi|kubernetes|docker|...)\b/i;
 ```
 
-On match, emit a short prompt-context block:
+### Hook output shapes (only one emitted per fire)
+
+**Cold-state nudge** (DB absent, first prompt of session):
+
+```
+[quartermaster] index not built. Run /qm init to enable discovery.
+```
+
+**Planning intent + tech keywords detected** (DB present, classifier match):
 
 ```
 [quartermaster] planning intent detected with tech keywords: [react, supabase].
 Consider /qm survey "<prompt summary>" before deep planning.
 3 installed capabilities likely relevant: superpowers:brainstorming, react-patterns, supabase-mcp.
 2 gap candidates available: vite-optimization (skills.sh, trusted), shadcn-ui (github, unknown).
+
+⚠ Inventory stale (last built 2026-05-19, plugin manifest changed since). Run /qm init to refresh.   [only shown when stale]
 ```
+
+**No classifier match:** hook emits nothing. Silent on every non-planning prompt.
 
 **Hook suggests; it does not run survey.** Auto-execution from a hook is too magical and burns tokens on false positives. The agent decides whether to invoke `/qm survey` based on the nudge.
 
@@ -350,7 +343,7 @@ Goal text → tokenize → expand with light synonym map (~30 entries: `k8s→ku
 
 ```sql
 SELECT c.id, c.source_type, c.name, c.description, c.installed,
-       c.bundle_id, c.trust_level,
+       c.bundle_id, c.source_url, c.source_sha,
        bm25(capabilities_fts, 4.0, 3.0, 1.0, 1.5) AS rank
 FROM capabilities_fts
 JOIN capabilities c ON c.rowid = capabilities_fts.rowid
@@ -359,7 +352,7 @@ ORDER BY rank
 LIMIT 20;
 ```
 
-Column weights: name 4.0, canonical_name 3.0, description 1.0, keywords 1.5.
+Column weights: name 4.0, canonical_name 3.0, description 1.0, keywords 1.5. `trust_level` is computed from `source_url` after this query returns (single pattern-match per row against `trust.json`).
 
 ### Stage 2 — Claude rerank (semantic, ~1.5K tokens)
 
@@ -393,9 +386,9 @@ Return JSON:
 
 **Why one call, not per-candidate:** flat cost regardless of candidate count up to 20; LLM sees the full set so ranking is comparative; `stop_reason` lets matcher detect "FTS narrowed wrong; widen the net" cases.
 
-### Stage 3 — split + present
+### Output format
 
-Ranked top 5 bucketed by `installed`:
+After Stage 2 returns ranked top 5, the matcher derives `trust_level` per row (lookup `source_url` against `trust.json`) and `invocation` per row (`INVOCATION_BY_TYPE` shape from Section 2), then buckets by `installed`:
 
 | Use now (installed) | Install candidates (gap) |
 |---|---|
@@ -435,7 +428,7 @@ Cheap enough to run every `/qm survey` without budgeting.
 
 ## Section 5 — Trust + install layer
 
-### `~/.quartermaster/trust.json`
+### `~/.quartermaster/trust.json` (user-editable config only)
 
 ```json
 {
@@ -447,17 +440,11 @@ Cheap enough to run every `/qm survey` without budgeting.
     "claude-plugins-official",
     "thedotmack/claude-mem"
   ],
-  "blocked_patterns": [],
-  "pins": {
-    "skill:superpowers:brainstorming": {
-      "source_sha": "5faddc4087553bdc3c7ee98a83300e844295207e",
-      "installed_at": 1716379200,
-      "installed_by": "auto-trusted",
-      "source_url": "https://github.com/superpowers-marketplace/superpowers"
-    }
-  }
+  "blocked_patterns": []
 }
 ```
+
+Pin state (per-install SHA records, install metadata) lives in the `trust_pins` table inside `inventory.db` — not in this file. Hand-editing `trust.json` is safe; the installer never writes to it (except via the explicit promote-to-trusted flow below, which only appends a pattern).
 
 **Pattern matching:** glob-style on `<owner>/<repo>` or marketplace name. Wildcards only at trailing position (`anthropic/*` ok; `*/foo` not). Case-insensitive. Exact match wins over wildcard.
 
@@ -466,31 +453,14 @@ Cheap enough to run every `/qm survey` without budgeting.
 ### Trust decision flow per install
 
 ```
-identify(candidate) → {source_url, source_sha, canonical_name}
-                      │
-                      ▼
-         ┌─ trust_lookup(source_url) ─┐
-         │                            │
-       blocked              trusted             unknown
-         │                    │                    │
-       refuse           pin_check                prompt_user
-         │                    │                    │
-                       ┌──┴──┐              ┌─────┴─────┐
-                    no pin  pin            confirm    skip
-                       │     │                │         │
-                    install  sha_match?     install   abort
-                            │       │         │
-                          same    drift      │
-                            │       │        │
-                         install confirm  prompt_promote
-                                  user      ("add <owner>
-                                  │          to trusted?")
-                                  │              │
-                              install ──────  yes / no
-                                                  │
-                                              update
-                                              trust.json
+blocked              → refuse
+trusted + no pin     → install, write trust_pins row
+trusted + pin match  → install (silent; already at pinned SHA)
+trusted + pin drift  → confirm user; on yes, install + update pin
+unknown              → confirm user; on yes, install + write pin + offer promote-to-trusted
 ```
+
+(All `install` outcomes append to `install_history`; only the trust outcomes touch `trust_pins` and `trust.json`.)
 
 ### SHA drift handling
 
@@ -541,7 +511,7 @@ Source github.com/foo is not in your trusted_patterns. Add to allowlist?
 [1/2/3]
 ```
 
-Default `3` on enter. Choice persists to `trust.json`.
+Default `3` on enter. Choices 1 and 2 append a pattern to `trust.json` (only place the installer writes that file). Choice 3 writes nothing.
 
 ### Installer return contract
 
@@ -575,23 +545,23 @@ Survey aggregates these into the final summary table before `EnterPlanMode`.
 
 ```
 ~/.quartermaster/
-├── inventory.db              SQLite primary (capabilities + install_history + FTS5)
+├── inventory.db              SQLite primary (capabilities + install_history + trust_pins
+│                              + mcp_tool_cache + FTS5)
 ├── inventory.db-wal          WAL mode for concurrent reads while indexer writes
 ├── inventory.db-shm
 ├── inventory.hash            12-char hash of input signature
-├── trust.json                allowlist + pins (Section 5)
+├── trust.json                user-editable allowlist patterns (no pins — those live in DB)
 ├── cli-extras.json           user-extended CLI manifest
 ├── synonyms.json             goal-text expansion map
+├── .session-init-shown       per-session marker (cold-state nudge already emitted)
 ├── logs/
 │   └── quartermaster-YYYY-MM-DD.log
 ├── scripts/                  bundled bun scripts (symlink to plugin install dir)
 │   ├── indexer.js
 │   ├── matcher.js
 │   ├── installer.js
-│   └── baseline-context.js
-└── hooks/
-    ├── session-start.sh
-    └── user-prompt-submit.sh
+│   └── prompt-hook.js        single script for the UserPromptSubmit hook
+└── (no hooks/ subdirectory — hook command in settings.json invokes bun script directly)
 ```
 
 ### Input-signature hash (`inventory.hash`)
@@ -616,9 +586,8 @@ PATH binaries hashed by directory mtime only. Adding a new tool to `/opt/homebre
 
 | Caller | Hash match? | Action |
 |---|---|---|
-| SessionStart hook | match | Inject baseline, exit |
-| SessionStart hook | mismatch | Inject baseline with ⚠ stale warning, exit (do NOT re-index from hook) |
-| UserPromptSubmit hook | any | Never re-indexes |
+| UserPromptSubmit hook | match | Run classifier; emit nudge or nothing. Never re-indexes. |
+| UserPromptSubmit hook | mismatch | Same as match, but append ⚠ stale warning to any nudge it emits. Never re-indexes. |
 | `/qm survey` | match | Use cached, skip indexer |
 | `/qm survey` | mismatch | Run indexer first, then proceed |
 | `/qm init` | any | Always re-index (incremental) |
@@ -642,22 +611,12 @@ Per-source enumerators:
 | Commands | Glob `~/.claude/commands/**/*.md` + every `<plugin>/commands/**/*.md` — parse frontmatter |
 | Agents | Glob `~/.claude/agents/*.md` + every `<plugin>/agents/*.md` — parse frontmatter |
 | MCP servers | Parse `~/.claude.json` `mcpServers` object + every `<plugin>/.mcp.json` |
-| MCP tools | For each connected server, call MCP `tools/list`; cache per `server_config_hash`; refresh only on change or TTL expiry |
+| MCP tools | For each connected server, call MCP `tools/list`; cache per `server_config_hash`; refresh only when hash changes (or explicit `/qm init --refresh-mcp`) |
 | CLIs | Walk curated manifest (`cli-known.json` bundled with plugin) + `cli-extras.json` — `which <bin>` for each; skip absent |
 
 ### MCP `tools/list` caching
 
-```sql
-CREATE TABLE mcp_tool_cache (
-  server_name        TEXT PRIMARY KEY,
-  server_config_hash TEXT NOT NULL,
-  tools_json         TEXT NOT NULL,
-  fetched_at         INTEGER NOT NULL,
-  ttl_epoch          INTEGER NOT NULL     -- fetched_at + 7 days
-);
-```
-
-Refresh on: `server_config_hash` mismatch OR `now > ttl_epoch` OR explicit `/qm init --refresh-mcp`. Stale-but-cached is fine; remote MCP tool surfaces rarely change.
+Schema lives in Section 2 (table `mcp_tool_cache`). Refresh trigger: `server_config_hash` mismatch OR explicit `/qm init --refresh-mcp`. No TTL — the config-hash is a precise change-detector for the only input that can change a server's tools list; layering a time-based trigger on top would do the same work twice with an arbitrary cadence. If a server's tool list ever changes without a config bump (none observed in practice), `/qm init --refresh-mcp` is the escape hatch.
 
 ### Concurrent access
 
@@ -666,7 +625,7 @@ SQLite WAL mode → multiple readers + single writer. Two simultaneous `/qm init
 ### Backup + recovery
 
 - `/qm init --force` re-derives everything from filesystem. No data loss possible — DB is pure cache.
-- `trust.json` and `cli-extras.json` are NOT regenerable — they hold user choices. `init` never touches them.
+- `trust.json` and `cli-extras.json` are NOT regenerable — they hold user choices. `init` never touches them. (`trust_pins` rows inside `inventory.db` ARE regenerable from `install_history`, so `--force` rebuild is safe.)
 - On `inventory.db` corruption: rename to `.db.broken`, run `init`. Log the event.
 
 ### Log discipline
@@ -724,9 +683,9 @@ Categorised failure inventory with the handling rule for each.
 
 | Failure | Handling |
 |---|---|
-| SessionStart hook >200ms budget | Bun script has internal 150ms watchdog; on timeout, emit minimal "[quartermaster] index ready (slow)" and exit |
+| UserPromptSubmit hook >100ms budget | Bun script has internal 80ms watchdog; on timeout, emit nothing and exit 0 (fail-open) |
 | UserPromptSubmit hook errors | Fail-open: any error → emit nothing, return 0, log error. User never sees breakage; classifier nudge just doesn't appear |
-| Hook fires before `init` ever ran | Emit one-time nudge "Run /qm init"; suppress for rest of session via `~/.quartermaster/.nudged-this-session` marker |
+| Hook fires before `init` ever ran | Emit one-time cold-state nudge "Run /qm init"; suppress for rest of session via `.session-init-shown` marker |
 
 ### F. Trigger logic edge cases
 
@@ -743,14 +702,14 @@ Categorised failure inventory with the handling rule for each.
 | Case | Handling |
 |---|---|
 | Skill and MCP tool with same description | Both surface in rerank; LLM picks based on goal context |
-| Plugin disabled but skills inside still indexed | Plugin row `enabled: 0`; skills inherit `enabled: 0`; matcher deprioritises (bm25 unaffected, rerank prompt notes disabled status) |
+| Plugin disabled but skills inside still indexed | Plugin row `enabled: 0`; skills inherit `enabled: 0` via `bundle_id` lookup at read time; matcher deprioritises (bm25 unaffected, rerank prompt notes disabled status) |
 | Capability installed but `enabled: false` | Matcher surfaces with badge `(disabled)`; recommends enable, not install |
 
 ### H. Degradation summary
 
 | Layer offline | What still works |
 |---|---|
-| Claude API down | FTS-only matching; install flows fine; baseline injection fine |
+| Claude API down | FTS-only matching; install flows fine; hook nudges fine (no LLM calls) |
 | SQLite corrupt | Hooks emit "run /qm init"; nothing else works until rebuild |
 | Network down | All read paths fine; gap-tier-1 registry lookups + tier-3 web search disabled with clear message |
 | `claude` CLI broken | Indexer skips plugin enumeration; everything else works |
@@ -764,23 +723,11 @@ Categorised failure inventory with the handling rule for each.
 
 | Deferred | Why out | Trigger to revisit |
 |---|---|---|
-| Local embedding model (fastembed/ONNX) | FTS5+rerank handles ≤500 records cleanly; zero binary deps | Inventory >500 records OR rerank cost becomes annoying |
-| Chroma vector DB | Same as above; schema already has `content_hash` for clean future migration | Same trigger as embeddings |
-| Cryptographic signature verification (sigstore/cosign) | No mainstream signing in Claude plugin ecosystem yet | When `claude plugin` itself adopts signing |
-| Sandboxed install (containers, ephemeral users) | Same trust boundary as native `claude plugin install` already has | When user reports a malicious-plugin incident |
+| Semantic embeddings (Chroma sidecar or local ONNX model) | FTS5+rerank handles ≤500 records cleanly; schema's `content_hash` is forward-compatible | Inventory grows past 500 records OR rerank misses become frequent |
+| Cryptographic signature verification (sigstore/cosign) | No mainstream signing in Claude plugin ecosystem yet | When `claude plugin install` itself adopts signing |
 | Auto-uninstall stale capabilities | Destructive; user's installs are user's choice | Never auto. Only ever `/qm prune` with explicit confirm |
-| Auto-disable plugins matcher never recommends | Same | Same |
-| Team-shared trust files / shared inventories | Personal tool first; team sync requires sync infra, conflict resolution | When second user asks for it |
-| Telemetry on which capabilities get recommended | Privacy cost > insight gain at v1 scale | Opt-in only if added |
-| LLM-driven classifier in UserPromptSubmit hook | 50ms budget rules out LLM call; regex+keyword sufficient for nudge | If false-positive rate proves intolerable |
-| Auto-survey on every prompt | Magical, burns tokens, hard to undo | Never — hook stays "suggest, don't run" |
-| Cross-session learning (which recommendations got accepted) | State management complexity; accept/skip already provides feedback | When pattern of bad recommendations emerges |
-| GUI / web dashboard for inventory inspection | `/qm list` covers it | When inventory routinely needs faceted browsing |
-| MCP server health monitoring / auto-reconnect | `claude mcp` owns connection lifecycle, not us | Not our layer to own |
-| Project-local inventory overrides | Personal-tool scope first | When per-repo capability profiles are requested |
-| Localisation (skillless's Korean default) | English only; user's prior art shows it confuses agents | Never — locale is user's CLI/shell concern |
-| `/qm watch` daemon | Hash-on-tick is good enough; daemon adds process lifecycle | If hash check becomes hot-path bottleneck |
-| Inventory diff between sessions ("what's new since last") | Nice-to-have, not load-bearing | When index changes get frequent |
+| Telemetry on which recommendations get accepted | Privacy cost > insight gain at v1 scale; nudges already give the user a feedback loop | Opt-in only, and only if recommendation quality becomes measurably poor |
+| LLM-driven classifier in UserPromptSubmit hook | 100ms budget rules out LLM call; regex+keyword nudge is good enough at suggesting `/qm survey` | If false-positive rate on the regex classifier proves intolerable in practice |
 
 ---
 
