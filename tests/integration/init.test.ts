@@ -37,5 +37,6 @@ describe("runInit", () => {
     });
     expect(result.ok).toBe(true);
     expect(existsSync(join(dataDir, "inventory.db"))).toBe(false);
+    expect(existsSync(join(dataDir, "trust.json"))).toBe(false);
   });
 });

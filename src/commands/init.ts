@@ -35,7 +35,6 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
   const hashPath = join(args.dataDir, "inventory.hash");
 
   if (args.force && existsSync(dbPath)) rmSync(dbPath);
-  seedDefault(trustPath);
 
   const enabled = args.enabledPlugins ?? new Set<string>();
   const records = [
@@ -51,6 +50,7 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
     return { ok: true, counts, problems };
   }
 
+  seedDefault(trustPath);
   const db = openDb(dbPath);
   migrate(db);
   if (args.refreshMcp) db.exec("DELETE FROM mcp_tool_cache");
