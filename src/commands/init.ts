@@ -65,7 +65,7 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
 function loadCliExtras(dataDir: string): Record<string, CliKnown> {
   const path = join(dataDir, "cli-extras.json");
   if (!existsSync(path)) return {};
-  try { return JSON.parse(readFileSync(path, "utf8")) as Record<string, CliKnown>; } catch { return {}; }
+  try { return JSON.parse(readFileSync(path, "utf8")) as Record<string, CliKnown>; } catch { console.warn("[quartermaster] cli-extras.json malformed; ignoring"); return {}; }
 }
 
 function countBySource(records: { source_type: string }[]): Record<string, number> {
