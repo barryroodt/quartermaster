@@ -2,6 +2,7 @@
 import { paths } from "./paths.ts";
 import { type SourceType, SOURCE_TYPES, isSourceType } from "./inventory/types.ts";
 import { printSurvey, printCapability } from "./matcher/format.ts";
+import { loadJsonOrAsync } from "./util/json.ts";
 
 const [, , sub, ...rest] = process.argv;
 
@@ -80,21 +81,17 @@ async function main() {
 }
 
 async function loadMcpServers(): Promise<Record<string, unknown>> {
-  try {
-    const j = JSON.parse(await Bun.file(paths.claudeJson).text());
-    return j.mcpServers ?? {};
-  } catch { return {}; }
+  const j = await loadJsonOrAsync<{ mcpServers?: Record<string, unknown> }>(paths.claudeJson, {});
+  return j.mcpServers ?? {};
 }
 
 async function loadEnabledPlugins(): Promise<Set<string>> {
-  try {
-    const j = JSON.parse(await Bun.file(paths.claudeSettings).text());
-    return new Set(
-      Object.entries(j.enabledPlugins ?? {})
-        .filter(([, v]) => v === true)
-        .map(([k]) => k),
-    );
-  } catch { return new Set(); }
+  const j = await loadJsonOrAsync<{ enabledPlugins?: Record<string, boolean> }>(paths.claudeSettings, {});
+  return new Set(
+    Object.entries(j.enabledPlugins ?? {})
+      .filter(([, v]) => v === true)
+      .map(([k]) => k),
+  );
 }
 
 function mcpFetcher() {
