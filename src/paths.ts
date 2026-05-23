@@ -9,7 +9,7 @@ export const paths = {
   trustJson: `${DATA}/trust.json`,
   cliExtras: `${DATA}/cli-extras.json`,
   synonyms: `${DATA}/synonyms.json`,
-  sessionMarker: `${DATA}/.session-init-shown`,
+  sessionMarker: `${DATA}/.init-nudge-shown`,
   logDir: `${DATA}/logs`,
   claudeDir: CLAUDE,
   claudeSkills: `${CLAUDE}/skills`,

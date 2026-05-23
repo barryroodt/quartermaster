@@ -1,31 +1,33 @@
-const PLANNING_TRIGGERS: RegExp[] = [
-  /^(plan|design|brainstorm|build|implement|create|set up)\b/i,
-  /\b(want to|going to|need to|trying to|let['']?s) (plan|design|brainstorm|build|implement|create|set up)\b/i,
-  /\bhow (would|should|do) (i|we|you)\b/i,
-  /\bwhat['']?s? the best way to\b/i,
-  /\b(approach|strategy|architecture) for\b/i,
-];
+import triggers from "./triggers.json" with { type: "json" };
+import techKeywords from "./tech-keywords.json" with { type: "json" };
+import synonyms from "../matcher/synonyms.json" with { type: "json" };
 
-const TECH_KEYWORDS = [
-  "react","vue","svelte","angular","nextjs","next.js","remix","astro",
-  "django","fastapi","flask","rails","laravel","spring",
-  "kubernetes","k8s","docker","terraform","ansible","helm",
-  "aws","gcp","azure","vercel","netlify","cloudflare",
-  "postgres","postgresql","mysql","sqlite","redis","kafka","rabbitmq","clickhouse","mongodb",
-  "prisma","drizzle","sqlalchemy","typeorm",
-  "supabase","firebase","auth0","clerk","stripe",
-  "typescript","javascript","python","rust","go","golang","ruby","php","java","kotlin","swift",
-  "graphql","grpc","trpc","rest","websocket",
-  "bun","node","deno","npm","pnpm","yarn","cargo","pip","poetry",
-  "vite","webpack","esbuild","turbopack","rollup","parcel",
-  "jest","vitest","pytest","playwright","cypress","mocha",
-];
+const REGEX_META = /[\\^$*+?.()|[\]{}]/g;
+function escapeRegex(s: string): string {
+  return s.replace(REGEX_META, "\\$&");
+}
+
+const PLANNING_TRIGGERS: RegExp[] = (triggers as string[]).map(src => new RegExp(src, "i"));
+
+const TECH_PATTERNS: { keyword: string; re: RegExp }[] = (techKeywords as string[]).map(t => ({
+  keyword: t,
+  re: new RegExp(`\\b${escapeRegex(t)}\\b`),
+}));
+
+const SYN_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(synonyms as Record<string, string[]>).map(([k, v]) => [k, v[0]!]),
+);
+function normalize(keyword: string): string {
+  return SYN_MAP[keyword] ?? keyword;
+}
 
 export interface ClassifyResult { planning: boolean; techKeywords: string[]; fire: boolean }
 
 export function classify(prompt: string): ClassifyResult {
   const planning = PLANNING_TRIGGERS.some(re => re.test(prompt));
   const lower = prompt.toLowerCase();
-  const techKeywords = TECH_KEYWORDS.filter(t => new RegExp(`\\b${t.replace(".", "\\.")}\\b`).test(lower));
+  const rawHits = TECH_PATTERNS.filter(p => p.re.test(lower)).map(p => p.keyword);
+  const normalized = rawHits.map(normalize);
+  const techKeywords = Array.from(new Set(normalized));
   return { planning, techKeywords, fire: planning && techKeywords.length > 0 };
 }

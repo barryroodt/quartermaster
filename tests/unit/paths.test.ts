@@ -14,8 +14,8 @@ describe("paths", () => {
     expect(paths.trustJson).toBe(`${paths.dataDir}/trust.json`);
   });
 
-  test("sessionMarker is dataDir/.session-init-shown", () => {
-    expect(paths.sessionMarker).toBe(`${paths.dataDir}/.session-init-shown`);
+  test("sessionMarker is dataDir/.init-nudge-shown", () => {
+    expect(paths.sessionMarker).toBe(`${paths.dataDir}/.init-nudge-shown`);
   });
 
   test("claudeSkills is HOME/.claude/skills", () => {
