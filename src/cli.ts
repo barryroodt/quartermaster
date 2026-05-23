@@ -3,13 +3,18 @@ import { paths } from "./paths.ts";
 import { type SourceType, SOURCE_TYPES, isSourceType } from "./inventory/types.ts";
 import { printSurvey, printCapability } from "./matcher/format.ts";
 import { loadJsonOrAsync } from "./util/json.ts";
+import { runInit } from "./commands/init.ts";
+import { runSurvey } from "./commands/survey.ts";
+import { runList } from "./commands/list.ts";
+import { runTrustAdd, runTrustList } from "./commands/trust.ts";
+import { runPrune } from "./commands/prune.ts";
+import { rerank } from "./matcher/rerank.ts";
 
 const [, , sub, ...rest] = process.argv;
 
 async function main() {
   switch (sub) {
     case "init": {
-      const { runInit } = await import("./commands/init.ts");
       const flags = new Set(rest);
       const args = {
         dataDir: paths.dataDir,
@@ -30,8 +35,6 @@ async function main() {
     case "survey": {
       const goal = rest.join(" ");
       if (!goal) { console.error("usage: /qm survey <goal>"); process.exit(2); }
-      const { runSurvey } = await import("./commands/survey.ts");
-      const { rerank } = await import("./matcher/rerank.ts");
       const result = await runSurvey({
         dataDir: paths.dataDir,
         dbPath: paths.inventoryDb,
@@ -46,7 +49,6 @@ async function main() {
       break;
     }
     case "list": {
-      const { runList } = await import("./commands/list.ts");
       const raw = rest.find(a => a.startsWith("--source-type="))?.split("=")[1];
       let filter: SourceType | undefined;
       if (raw !== undefined) {
@@ -63,14 +65,12 @@ async function main() {
     }
     case "trust": {
       const action = rest[0];
-      const { runTrustAdd, runTrustList } = await import("./commands/trust.ts");
       if (action === "add") runTrustAdd(paths.trustJson, rest[1]);
       else if (action === "list") console.log(JSON.stringify(runTrustList(paths.trustJson), null, 2));
       else { console.error("usage: /qm trust add <pattern> | list"); process.exit(2); }
       break;
     }
     case "prune": {
-      const { runPrune } = await import("./commands/prune.ts");
       console.log(`[quartermaster] pruned ${runPrune(paths.inventoryDb)} rows`);
       break;
     }
