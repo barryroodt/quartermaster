@@ -5,7 +5,16 @@ export function deriveBundleKind(bundleId: string | null): "plugin" | "marketpla
   return bundleId.includes("@") ? "plugin" : "marketplace";
 }
 
-export interface Invocation { style: string; name?: string; example?: string; cmd?: string; subagent_type?: string; load_tools_via?: string }
+// Discriminated by `style`. Each variant carries exactly the fields its
+// consumer needs — no all-optional bag-of-fields. Narrow via `inv.style`.
+export type Invocation =
+  | { style: "skill"; name: string }
+  | { style: "slash"; name: string }
+  | { style: "tool"; name: string }
+  | { style: "server"; name: string; load_tools_via: "ToolSearch" }
+  | { style: "agent"; subagent_type: string }
+  | { style: "bash"; example: string }
+  | { style: "install"; cmd: string };
 
 export function deriveInvocation(sourceType: SourceType, canonicalName: string): Invocation {
   switch (sourceType) {

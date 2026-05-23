@@ -39,6 +39,9 @@ describe("expandQuery", () => {
     expect(expandQuery("foo/bar:baz")).not.toContain("/");
     expect(expandQuery("foo/bar:baz")).not.toContain(":");
   });
+  test("hyphens are split, not preserved (FTS5 treats '-' as NOT operator)", () => {
+    expect(expandQuery("kube-helper")).not.toContain("-");
+  });
 });
 
 describe("ftsNarrow", () => {
@@ -57,5 +60,24 @@ describe("ftsNarrow", () => {
   test("returns empty when no hits", () => {
     db = openDb(dbPath); migrate(db);
     expect(ftsNarrow(db, "nothing", 20)).toEqual([]);
+  });
+
+  test("hyphenated goal does not become FTS5 NOT — matches records the user expects", () => {
+    db = openDb(dbPath); migrate(db);
+    applyRecords(db, [
+      rec("a", "kube-helper", "kubernetes helper utilities"),
+      rec("b", "unrelated", "totally different"),
+    ]);
+    // Pre-fix: query "kube-helper" reaches FTS5 verbatim, parses as
+    // "kube NOT helper", silently returns nothing or wrong rows.
+    const hits = ftsNarrow(db, "kube-helper", 20);
+    expect(hits.map(h => h.id)).toEqual(["a"]);
+  });
+
+  test("FtsHit carries canonical_name from SELECT", () => {
+    db = openDb(dbPath); migrate(db);
+    applyRecords(db, [rec("skill:foo", "foo", "a foo skill")]);
+    const hits = ftsNarrow(db, "foo", 20);
+    expect(hits[0].canonical_name).toBe("skill:foo");
   });
 });

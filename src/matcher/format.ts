@@ -7,6 +7,7 @@ export interface FormattedRow {
   id: string;
   source_type: SourceType;
   name: string;
+  canonical_name: string;
   description: string | null;
   installed: number;
   bundle_id: string | null;
@@ -25,8 +26,9 @@ export interface FormattedResults {
 export function formatResults(hits: FtsHit[], trustCfg: TrustConfig): FormattedResults {
   const rows: FormattedRow[] = hits.map(h => ({
     id: h.id,
-    source_type: h.source_type as SourceType,
+    source_type: h.source_type,
     name: h.name,
+    canonical_name: h.canonical_name,
     description: h.description,
     installed: h.installed,
     bundle_id: h.bundle_id,
@@ -34,7 +36,7 @@ export function formatResults(hits: FtsHit[], trustCfg: TrustConfig): FormattedR
     source_url: h.source_url,
     source_sha: h.source_sha,
     trust_level: trustLevel(h.source_url, trustCfg),
-    invocation: deriveInvocation(h.source_type as SourceType, h.id.split(":").slice(1).join(":") || h.name),
+    invocation: deriveInvocation(h.source_type, h.canonical_name),
   }));
   return {
     installed: rows.filter(r => r.installed === 1),
