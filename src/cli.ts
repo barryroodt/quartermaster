@@ -1,15 +1,7 @@
 #!/usr/bin/env bun
 import { paths } from "./paths.ts";
-import type { SourceType } from "./inventory/types.ts";
+import { type SourceType, SOURCE_TYPES, isSourceType } from "./inventory/types.ts";
 import type { SurveyResult } from "./commands/survey.ts";
-
-const SOURCE_TYPES: readonly SourceType[] = [
-  "skill", "plugin", "command", "agent", "mcp_server", "mcp_tool", "cli",
-];
-
-function isSourceType(s: string): s is SourceType {
-  return (SOURCE_TYPES as readonly string[]).includes(s);
-}
 
 const [, , sub, ...rest] = process.argv;
 

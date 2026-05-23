@@ -1,4 +1,8 @@
-export type SourceType = "skill" | "plugin" | "command" | "agent" | "mcp_server" | "mcp_tool" | "cli";
+export const SOURCE_TYPES = ["skill", "plugin", "command", "agent", "mcp_server", "mcp_tool", "cli"] as const;
+export type SourceType = typeof SOURCE_TYPES[number];
+export function isSourceType(s: string): s is SourceType {
+  return (SOURCE_TYPES as readonly string[]).includes(s);
+}
 
 export interface CapabilityRecord {
   id: string;
