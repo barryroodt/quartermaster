@@ -8,6 +8,7 @@ import { runSurvey } from "./commands/survey.ts";
 import { runList } from "./commands/list.ts";
 import { runTrustAdd, runTrustList } from "./commands/trust.ts";
 import { runPrune } from "./commands/prune.ts";
+import { runInstall } from "./commands/install.ts";
 import { rerank } from "./matcher/rerank.ts";
 
 const [, , sub, ...rest] = process.argv;
@@ -80,8 +81,40 @@ async function main() {
       console.log(`[quartermaster] pruned ${runPrune(paths.inventoryDb)} rows`);
       break;
     }
+    case "install": {
+      const id = rest[0];
+      if (!id) {
+        console.error("usage: /qm install <capability_id> [--yes] [--yes-drift] [--transport-arg=<arg>]...");
+        process.exit(2);
+      }
+      const flags = new Set(rest);
+      const transportArgs = rest
+        .filter(a => a.startsWith("--transport-arg="))
+        .map(a => a.split("=").slice(1).join("="));
+      const report = await runInstall({
+        dbPath: paths.inventoryDb,
+        trustPath: paths.trustJson,
+        capabilityId: id,
+        yes: flags.has("--yes"),
+        yesDrift: flags.has("--yes-drift"),
+        transportArgs,
+      });
+      const { outcome } = report;
+      console.log(`[quartermaster] install ${outcome.status}: ${outcome.capability_id}`);
+      if (outcome.errors.length) console.error(outcome.errors.join("\n"));
+      if (report.trust_action === "refused-untrusted") {
+        console.error("\nRe-run with --yes to install from untrusted source.");
+        process.exit(3);
+      }
+      if (report.trust_action === "refused-drift") {
+        console.error("\nRe-run with --yes-drift to accept pin drift.");
+        process.exit(3);
+      }
+      if (report.promote_suggestion) console.log("\n" + report.promote_suggestion);
+      break;
+    }
     default:
-      console.error("usage: /qm init|survey|list|trust|prune");
+      console.error("usage: /qm init|survey|install|list|trust|prune");
       process.exit(2);
   }
 }
