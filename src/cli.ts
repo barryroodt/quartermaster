@@ -27,6 +27,9 @@ async function main() {
         refreshMcp: flags.has("--refresh-mcp"),
         enabledPlugins: await loadEnabledPlugins(),
       };
+      if (Object.keys(args.mcpServers).length > 0) {
+        console.warn("[quartermaster] MCP fetcher not wired in v0.1 — mcp_tool enumeration disabled");
+      }
       const r = await runInit(args);
       console.log(`[quartermaster] init: ${JSON.stringify(r.counts)}`);
       if (r.problems.length) console.warn(r.problems.join("\n"));
