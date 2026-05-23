@@ -37,8 +37,10 @@ describe("runSurvey", () => {
         ranked: hits.slice(0, 5).map(h => ({ id: h.id, score: 80, why: "ok" })),
         stop_reason: "all_relevant",
       }),
+      gapSearchImpl: async () => [],
     });
     expect(result.installed.length + result.gap.length).toBeGreaterThan(0);
+    expect(result.external_gaps).toEqual([]);
   });
 
   test("falls back to FTS-only when rerank returns null", async () => {
@@ -48,9 +50,11 @@ describe("runSurvey", () => {
     const result = await runSurvey({
       dataDir: tmpDir!, dbPath, goal: "kubernetes",
       rerankImpl: async () => null,
+      gapSearchImpl: async () => [],
     });
     expect(result.degraded).toBe(true);
     expect(result.installed.length + result.gap.length).toBeGreaterThan(0);
+    expect(result.external_gaps).toEqual([]);
   });
 
   test("empty inventory returns refuse signal", async () => {
@@ -58,7 +62,31 @@ describe("runSurvey", () => {
     const result = await runSurvey({
       dataDir: tmpDir!, dbPath, goal: "anything",
       rerankImpl: async () => null,
+      gapSearchImpl: async () => [],
     });
     expect(result.refused).toBe(true);
+    expect(result.external_gaps).toEqual([]);
+  });
+
+  test("thin installed bucket triggers gap-search and surfaces external gaps", async () => {
+    const db = openDb(dbPath); migrate(db);
+    // Single installed hit → below THIN_INSTALLED_THRESHOLD (3) → triggers gap search.
+    applyRecords(db, [rec({ id: "a", description: "kubernetes deploy", installed: 1 })]);
+    db.close();
+    const result = await runSurvey({
+      dataDir: tmpDir!, dbPath, goal: "kubernetes",
+      rerankImpl: async (_g, hits) => ({
+        ranked: hits.map(h => ({ id: h.id, score: 80, why: "ok" })),
+        stop_reason: "all_relevant",
+      }),
+      gapSearchImpl: async () => [
+        { registry: "skills.sh", name: "kube", canonical: "owner/repo@kube", installs: 42, url: "https://github.com/owner/repo" },
+        { registry: "brew", name: "kubectl", canonical: "kubectl", url: "https://formulae.brew.sh/formula/kubectl" },
+      ],
+    });
+    expect(result.external_gaps.length).toBe(2);
+    expect(result.external_gaps[0].capability_id).toBe("skill:skills-sh:owner/repo@kube");
+    expect(result.external_gaps[0].install_command).toBe("/qm install skill:skills-sh:owner/repo@kube");
+    expect(result.external_gaps[1].capability_id).toBe("cli:brew:kubectl");
   });
 });

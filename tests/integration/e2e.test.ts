@@ -41,6 +41,7 @@ describe("end-to-end: init → survey", () => {
         ranked: hits.map(h => ({ id: h.id, score: 90, why: "match" })),
         stop_reason: "all_relevant",
       }),
+      gapSearchImpl: async () => [],
     });
     const all = [...surveyResult.installed, ...surveyResult.gap];
     expect(all.find(r => r.name === "kube-helper")).toBeDefined();
