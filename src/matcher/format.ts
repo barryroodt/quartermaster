@@ -1,7 +1,8 @@
 import type { FtsHit } from "./fts.ts";
 import { trustLevel, type TrustConfig, type TrustLevel } from "../trust/derive.ts";
 import { deriveInvocation, deriveBundleKind, type Invocation } from "./derive.ts";
-import type { SourceType } from "../inventory/types.ts";
+import type { CapabilityRecord, SourceType } from "../inventory/types.ts";
+import type { SurveyResult } from "../commands/survey.ts";
 
 export interface FormattedRow {
   id: string;
@@ -21,6 +22,24 @@ export interface FormattedRow {
 export interface FormattedResults {
   installed: FormattedRow[];
   gap: FormattedRow[];
+}
+
+const DESC_TRUNC = 80;
+
+export function printSurvey(r: SurveyResult): void {
+  console.log("INSTALLED (use now):");
+  for (const row of r.installed) {
+    console.log(`  ${row.name} (${row.source_type}) — ${row.description?.slice(0, DESC_TRUNC) ?? ""}`);
+  }
+  console.log("\nGAP CANDIDATES:");
+  for (const row of r.gap) {
+    console.log(`  ${row.name} (${row.source_type}, ${row.trust_level}) — ${row.description?.slice(0, DESC_TRUNC) ?? ""}`);
+  }
+  if (r.degraded) console.log("\n⚠ matching degraded (no semantic rerank)");
+}
+
+export function printCapability(r: CapabilityRecord): void {
+  console.log(`${r.source_type.padEnd(10)} ${r.canonical_name.padEnd(40)} ${r.description?.slice(0, DESC_TRUNC) ?? ""}`);
 }
 
 export function formatResults(hits: FtsHit[], trustCfg: TrustConfig): FormattedResults {

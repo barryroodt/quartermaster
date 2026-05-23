@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { paths } from "./paths.ts";
 import { type SourceType, SOURCE_TYPES, isSourceType } from "./inventory/types.ts";
-import type { SurveyResult } from "./commands/survey.ts";
+import { printSurvey, printCapability } from "./matcher/format.ts";
 
 const [, , sub, ...rest] = process.argv;
 
@@ -56,7 +56,7 @@ async function main() {
         filter = raw;
       }
       for (const r of runList(paths.inventoryDb, filter)) {
-        console.log(`${r.source_type.padEnd(10)} ${r.canonical_name.padEnd(40)} ${r.description?.slice(0, 60) ?? ""}`);
+        printCapability(r);
       }
       break;
     }
@@ -99,18 +99,6 @@ async function loadEnabledPlugins(): Promise<Set<string>> {
 
 function mcpFetcher() {
   return async (_name: string, _cfg: unknown) => [];  // v1 stub; real impl needs MCP client wiring
-}
-
-function printSurvey(r: SurveyResult): void {
-  console.log("INSTALLED (use now):");
-  for (const row of r.installed) {
-    console.log(`  ${row.name} (${row.source_type}) — ${row.description?.slice(0, 80) ?? ""}`);
-  }
-  console.log("\nGAP CANDIDATES:");
-  for (const row of r.gap) {
-    console.log(`  ${row.name} (${row.source_type}, ${row.trust_level}) — ${row.description?.slice(0, 80) ?? ""}`);
-  }
-  if (r.degraded) console.log("\n⚠ matching degraded (no semantic rerank)");
 }
 
 main();
