@@ -1,8 +1,8 @@
 import { openDb } from "../db/connection.ts";
 import { COLS } from "../inventory/indexer.ts";
-import type { CapabilityRecord } from "../inventory/types.ts";
+import type { CapabilityRecord, SourceType } from "../inventory/types.ts";
 
-export function runList(dbPath: string, sourceType?: string): CapabilityRecord[] {
+export function runList(dbPath: string, sourceType?: SourceType): CapabilityRecord[] {
   const db = openDb(dbPath);
   try {
     const cols = COLS.join(",");
