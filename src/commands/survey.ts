@@ -4,7 +4,7 @@ import { migrate } from "../db/migrate.ts";
 import { ftsNarrow, type FtsHit } from "../matcher/fts.ts";
 import { formatResults, type FormattedResults } from "../matcher/format.ts";
 import { loadTrust } from "../trust/derive.ts";
-import type { RerankResult } from "../matcher/rerank.ts";
+import { MAX_RANKED, type RerankResult } from "../matcher/rerank.ts";
 
 export interface SurveyArgs {
   dataDir: string;
@@ -42,7 +42,7 @@ export async function runSurvey(args: SurveyArgs): Promise<SurveyResult> {
   let stop: string | null = null;
   if (!ranked) {
     degraded = true;
-    topHits = hits.slice(0, 5);
+    topHits = hits.slice(0, MAX_RANKED);
   } else {
     stop = ranked.stop_reason;
     const byId = new Map(hits.map(h => [h.id, h]));

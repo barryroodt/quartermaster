@@ -7,7 +7,7 @@ export interface RankedItem { id: string; score: number; why: string }
 export type StopReason = "all_relevant" | "low_confidence" | "exhausted";
 export interface RerankResult { ranked: RankedItem[]; stop_reason: StopReason }
 
-const MAX_RANKED = 5;
+export const MAX_RANKED = 5;
 const MODEL = "claude-haiku-4-5-20251001";
 const SYSTEM = "You rank capabilities by relevance to a user's coding goal. Output strict JSON only — no preamble, no markdown.";
 const VALID_STOP_REASONS: readonly StopReason[] = ["all_relevant", "low_confidence", "exhausted"];
