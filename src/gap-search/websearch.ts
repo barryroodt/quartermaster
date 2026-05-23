@@ -1,4 +1,6 @@
-export type GapSourceType = "skill" | "mcp_server" | "cli";
+import type { SourceType } from "../inventory/types.ts";
+
+export type GapSourceType = Extract<SourceType, "skill" | "mcp_server" | "cli">;
 
 export function buildWebSearchQuery(type: GapSourceType, terms: string): string {
   switch (type) {
