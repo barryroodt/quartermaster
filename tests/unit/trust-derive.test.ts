@@ -28,6 +28,24 @@ describe("loadTrust", () => {
     expect(cfg.trusted_patterns).toEqual(["a/*"]);
     expect(cfg.blocked_patterns).toEqual(["b/c"]);
   });
+
+  test("trusted_patterns as a string (not array) → empty", () => {
+    const p = join(tmp, "trust.json");
+    writeFileSync(p, JSON.stringify({ trusted_patterns: "anthropic/*" }));
+    expect(loadTrust(p).trusted_patterns).toEqual([]);
+  });
+
+  test("trusted_patterns with non-string entries → filtered out", () => {
+    const p = join(tmp, "trust.json");
+    writeFileSync(p, JSON.stringify({ trusted_patterns: ["a/*", 42, null, "b/c"] }));
+    expect(loadTrust(p).trusted_patterns).toEqual(["a/*", "b/c"]);
+  });
+
+  test("malformed JSON → empty config + warn", () => {
+    const p = join(tmp, "trust.json");
+    writeFileSync(p, "{ not json");
+    expect(loadTrust(p).trusted_patterns).toEqual([]);
+  });
 });
 
 describe("trustLevel", () => {

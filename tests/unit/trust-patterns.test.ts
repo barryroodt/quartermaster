@@ -15,4 +15,11 @@ describe("validatePattern", () => {
   test("rejects */*", () => { expect(() => validatePattern("*/*")).toThrow(); });
   test("rejects bare *", () => { expect(() => validatePattern("*")).toThrow(); });
   test("rejects empty", () => { expect(() => validatePattern("")).toThrow(); });
+  test("rejects bare owner (no slash) — matcher cannot honor", () => {
+    expect(() => validatePattern("anthropic")).toThrow();
+  });
+  test("rejects mid/trailing wildcard variants — matcher only honors '/*' suffix", () => {
+    expect(() => validatePattern("anthropic/foo*")).toThrow();
+    expect(() => validatePattern("anthropic*/*")).toThrow();
+  });
 });
