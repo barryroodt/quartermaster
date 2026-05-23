@@ -72,6 +72,11 @@ export interface InstallerImpls {
   skillsSh?: (ctx: InstallContext) => Promise<InstallOutcome>;
   plugin?: (ctx: InstallContext) => Promise<InstallOutcome>;
   brewCli?: (ctx: InstallContext & { command: string }) => Promise<InstallOutcome>;
+  // MCP installs don't carry a github source_url for trust derivation, so a future
+  // trust pattern could match server names → known github orgs (e.g.
+  // @modelcontextprotocol/* → github.com/modelcontextprotocol). For v0.1 the
+  // dispatcher requires --yes uniformly; this DI hook is for tests.
+  mcp?: (ctx: InstallContext & { transport_args: string[] }) => Promise<InstallOutcome>;
 }
 
 export interface InstallArgs {
@@ -119,9 +124,6 @@ export async function runInstall(args: InstallArgs): Promise<InstallReport> {
   if (parsed.kind === "raw-skill") {
     return unsupportedOutcome(args.capabilityId, "v0.2: skill:raw install not yet wired in CLI dispatcher");
   }
-  if (parsed.kind === "mcp") {
-    return unsupportedOutcome(args.capabilityId, "v0.2: mcp:* install not yet wired in CLI dispatcher");
-  }
   if (parsed.kind === "unsupported") {
     return unsupportedOutcome(args.capabilityId, parsed.reason);
   }
@@ -145,6 +147,53 @@ export async function runInstall(args: InstallArgs): Promise<InstallReport> {
         },
         trust_action: "none",
       };
+    }
+
+    // MCP server: no github source_url by default → trust treated as `unknown`.
+    // v0.1 requires `--yes` uniformly. Future trust patterns could match server
+    // names → known github orgs (e.g. @modelcontextprotocol/*).
+    if (parsed.kind === "mcp") {
+      if (!args.yes) {
+        return {
+          outcome: {
+            capability_id: args.capabilityId,
+            status: "failed",
+            source_sha: null,
+            verified: false,
+            files: [],
+            errors: ["MCP server installs require --yes (no source URL for trust check; defaults to unknown)"],
+          },
+          trust_action: "refused-untrusted",
+        };
+      }
+      if (args.transportArgs.length === 0) {
+        return {
+          outcome: {
+            capability_id: args.capabilityId,
+            status: "failed",
+            source_sha: null,
+            verified: false,
+            files: [],
+            errors: ["MCP install requires at least one --transport-arg=<arg> (e.g. --transport-arg=npx --transport-arg=-y --transport-arg=@org/server)"],
+          },
+          trust_action: "none",
+        };
+      }
+      const impl = args.installerImpls?.mcp ?? installMcp;
+      const outcome = await impl({
+        capability_id: args.capabilityId,
+        canonical_name: parsed.name,
+        source_type: "mcp_server",
+        transport_args: args.transportArgs,
+      });
+      if (outcome.status === "installed") {
+        writeHistory(db, {
+          capability_id: args.capabilityId,
+          source_sha: outcome.source_sha ?? "n/a",
+          installed_by: "user-confirm",
+        });
+      }
+      return { outcome, trust_action: "user-confirm" };
     }
 
     // brew CLI: no source_url → trust check skipped; print-only outcome; no history row.

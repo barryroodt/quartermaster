@@ -73,9 +73,10 @@ describe("parseCapabilityId", () => {
     expect(r.kind).toBe("raw-skill");
   });
 
-  test("mcp:* → mcp (deferred)", () => {
+  test("mcp:* → mcp", () => {
     const r = parseCapabilityId("mcp:my-server");
     expect(r.kind).toBe("mcp");
+    if (r.kind === "mcp") expect(r.name).toBe("my-server");
   });
 
   test("garbage → unsupported", () => {
@@ -205,6 +206,54 @@ describe("runInstall", () => {
     });
     expect(report.trust_action).toBe("refused-drift");
     expect(report.outcome.errors.join("\n")).toContain("drift");
+  });
+
+  test("mcp install without --yes is refused (defaults to unknown trust)", async () => {
+    const report = await runInstall({
+      dbPath, trustPath,
+      capabilityId: "mcp:my-server",
+      yes: false, yesDrift: false, transportArgs: ["npx", "-y", "@org/srv"],
+    });
+    expect(report.trust_action).toBe("refused-untrusted");
+    expect(report.outcome.status).toBe("failed");
+    expect(report.outcome.errors[0]).toContain("--yes");
+  });
+
+  test("mcp install with --yes but no transport args fails with helpful error", async () => {
+    const report = await runInstall({
+      dbPath, trustPath,
+      capabilityId: "mcp:my-server",
+      yes: true, yesDrift: false, transportArgs: [],
+    });
+    expect(report.outcome.status).toBe("failed");
+    expect(report.outcome.errors[0]).toContain("--transport-arg");
+  });
+
+  test("mcp install with --yes + transport args writes history and reports user-confirm", async () => {
+    const report = await runInstall({
+      dbPath, trustPath,
+      capabilityId: "mcp:my-server",
+      yes: true, yesDrift: false, transportArgs: ["npx", "-y", "@org/srv"],
+      installerImpls: {
+        mcp: async (ctx) => ({
+          capability_id: ctx.capability_id,
+          status: "installed",
+          source_sha: null,
+          verified: true,
+          files: [],
+          errors: [],
+        }),
+      },
+    });
+    expect(report.outcome.status).toBe("installed");
+    expect(report.trust_action).toBe("user-confirm");
+
+    const db = openDb(dbPath); migrate(db);
+    const hist = getHistory(db, "mcp:my-server");
+    expect(hist.length).toBe(1);
+    expect(hist[0].installed_by).toBe("user-confirm");
+    expect(hist[0].source_sha).toBe("n/a");
+    db.close();
   });
 
   test("drift accepted with --yes-drift updates pin and writes history", async () => {
