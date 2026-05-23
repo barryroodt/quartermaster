@@ -2,7 +2,9 @@ import { $ } from "bun";
 
 export type RegistryHit =
   | { registry: "skills.sh"; name: string; canonical: string; installs: number; url: string }
-  | { registry: "brew"; name: string; canonical: string; url: string };
+  | { registry: "brew"; name: string; canonical: string; url: string }
+  | { registry: "smithery"; name: string; canonical: string; description: string; url: string; install_hint: string }
+  | { registry: "web-search-suggested"; name: string; canonical: string; description: string; url: string; install_hint: string };
 
 export class RegistrySearchFailed extends Error {
   constructor(

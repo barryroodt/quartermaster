@@ -11,6 +11,7 @@ import {
   RegistrySearchFailed,
   type RegistryHit,
 } from "../gap-search/registries.ts";
+import { searchSmithery, suggestMcpWebSearch } from "../gap-search/mcp-registry.ts";
 
 // Threshold below which we escalate to external registries. Cheap heuristic —
 // "we found nothing useful locally, so look outward". Tunable.
@@ -21,7 +22,7 @@ export interface ExternalGap {
   capability_id: string;
   name: string;
   description: string;
-  registry: "skills.sh" | "brew";
+  registry: "skills.sh" | "brew" | "smithery" | "web-search-suggested";
   url: string;
   install_command: string;
 }
@@ -54,20 +55,33 @@ function hitToGap(hit: RegistryHit): ExternalGap {
       install_command: `/qm install ${capabilityId}`,
     };
   }
-  const capabilityId = `cli:brew:${hit.name}`;
+  if (hit.registry === "brew") {
+    const capabilityId = `cli:brew:${hit.name}`;
+    return {
+      capability_id: capabilityId,
+      name: hit.name,
+      description: "homebrew formula",
+      registry: "brew",
+      url: hit.url,
+      install_command: `/qm install ${capabilityId}`,
+    };
+  }
+  // smithery + web-search-suggested already carry an install_hint (full /qm or
+  // WebSearch query). Use it verbatim so the agent can dispatch downstream.
+  const capabilityId = `mcp:${hit.canonical}`;
   return {
     capability_id: capabilityId,
     name: hit.name,
-    description: "homebrew formula",
-    registry: "brew",
+    description: hit.description,
+    registry: hit.registry,
     url: hit.url,
-    install_command: `/qm install ${capabilityId}`,
+    install_command: hit.install_hint,
   };
 }
 
 async function defaultGapSearch(query: string): Promise<RegistryHit[]> {
-  // Each search wrapped so a single registry failure doesn't sink the other.
-  const settle = async (label: "skills.sh" | "brew", fn: () => Promise<RegistryHit[]>) => {
+  // Each search wrapped so a single registry failure doesn't sink the others.
+  const settle = async (label: string, fn: () => Promise<RegistryHit[]>) => {
     try {
       return await fn();
     } catch (e) {
@@ -79,11 +93,16 @@ async function defaultGapSearch(query: string): Promise<RegistryHit[]> {
       return [];
     }
   };
-  const [a, b] = await Promise.all([
+  const [a, b, c] = await Promise.all([
     settle("skills.sh", () => searchSkillsSh(query)),
     settle("brew", () => searchBrew(query)),
+    // searchSmithery already swallows errors → []; settle adds a belt-and-braces guard.
+    settle("smithery", () => searchSmithery(query)),
   ]);
-  return [...a, ...b];
+  // If smithery surfaced nothing, append a WebSearch suggestion so the planner
+  // has a tier-3 escalation path per spec § 4 step 6.
+  const mcp = c.length > 0 ? c : [suggestMcpWebSearch(query)];
+  return [...a, ...b, ...mcp];
 }
 
 export async function runSurvey(args: SurveyArgs): Promise<SurveyResult> {

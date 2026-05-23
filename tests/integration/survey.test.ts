@@ -68,6 +68,34 @@ describe("runSurvey", () => {
     expect(result.external_gaps).toEqual([]);
   });
 
+  test("gap-search surfaces smithery MCP servers alongside skills.sh hits", async () => {
+    const db = openDb(dbPath); migrate(db);
+    applyRecords(db, [rec({ id: "a", description: "kubernetes deploy", installed: 1 })]);
+    db.close();
+    const result = await runSurvey({
+      dataDir: tmpDir!, dbPath, goal: "kubernetes",
+      rerankImpl: async (_g, hits) => ({
+        ranked: hits.map(h => ({ id: h.id, score: 80, why: "ok" })),
+        stop_reason: "all_relevant",
+      }),
+      gapSearchImpl: async () => [
+        { registry: "skills.sh", name: "kube", canonical: "owner/repo@kube", installs: 42, url: "https://github.com/owner/repo" },
+        {
+          registry: "smithery",
+          name: "@org/kube-srv",
+          canonical: "@org/kube-srv",
+          description: "kube MCP",
+          url: "https://smithery.ai/server/%40org%2Fkube-srv",
+          install_hint: "/qm install mcp:@org/kube-srv --yes --transport-arg=npx --transport-arg=-y --transport-arg=@org/kube-srv",
+        },
+      ],
+    });
+    expect(result.external_gaps.length).toBe(2);
+    const smithery = result.external_gaps.find(g => g.registry === "smithery");
+    expect(smithery?.capability_id).toBe("mcp:@org/kube-srv");
+    expect(smithery?.install_command).toContain("--transport-arg=@org/kube-srv");
+  });
+
   test("thin installed bucket triggers gap-search and surfaces external gaps", async () => {
     const db = openDb(dbPath); migrate(db);
     // Single installed hit → below THIN_INSTALLED_THRESHOLD (3) → triggers gap search.
