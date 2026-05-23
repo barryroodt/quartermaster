@@ -1,32 +1,32 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
 import { paths } from "../paths.ts";
-import type { InstallContext, InstallResult } from "./types.ts";
+import { runInstaller, InstallFailed } from "./run.ts";
+import type { InstallContext, InstallOutcome } from "./types.ts";
 
-export async function installSkillSkillsSh(ctx: InstallContext): Promise<InstallResult> {
-  const result: InstallResult = {
-    capability_id: ctx.capability_id, status: "failed", source_sha: null, trust_action: "none",
-    verified: false, files: [], errors: [],
-  };
-  try {
-    const proc = await $`npx -y skills add -y -g ${ctx.canonical_name}`.quiet().nothrow();
-    if (proc.exitCode !== 0) {
-      result.errors.push(proc.stderr.toString());
-      return result;
-    }
-    const slug = ctx.canonical_name.split("/").pop()!;
+export function installSkillSkillsSh(ctx: InstallContext): Promise<InstallOutcome> {
+  return runInstaller(ctx, async (c) => {
+    const proc = await $`npx -y skills add -y -g ${c.canonical_name}`.quiet().nothrow();
+    if (proc.exitCode !== 0) throw new InstallFailed(proc.stderr.toString());
+
+    const slug = c.canonical_name.split("/").pop()!;
     const skillDir = `${paths.claudeSkills}/${slug}`;
     if (!existsSync(`${skillDir}/SKILL.md`)) {
-      result.errors.push("SKILL.md not found after npx skills add (silent no-op)");
-      return result;
+      throw new InstallFailed("SKILL.md not found after npx skills add (silent no-op)");
     }
+
+    // No SHA = no trust pin = downstream pin write would crash. Fail loudly
+    // rather than return a "success" the orchestrator can't act on.
     const sha = await $`git -C ${skillDir} rev-parse HEAD`.quiet().nothrow();
-    result.source_sha = sha.exitCode === 0 ? sha.stdout.toString().trim() : null;
-    result.files = [`${skillDir}/SKILL.md`];
-    result.status = "installed";
-    result.verified = true;
-  } catch (e) {
-    result.errors.push(String(e));
-  }
-  return result;
+    if (sha.exitCode !== 0) {
+      throw new InstallFailed(`git rev-parse failed in ${skillDir}; cannot determine source SHA for trust pin`);
+    }
+
+    return {
+      status: "installed",
+      source_sha: sha.stdout.toString().trim(),
+      files: [`${skillDir}/SKILL.md`],
+      verified: true,
+    };
+  });
 }

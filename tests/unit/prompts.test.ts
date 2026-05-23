@@ -29,4 +29,18 @@ describe("prompts", () => {
     expect(parsePromoteChoice("")).toBe("keep-prompting");
     expect(parsePromoteChoice("foo")).toBe("keep-prompting");
   });
+
+  test("parsePromoteChoice aliases y/Y/yes to promote-org (reflex-typed yes)", () => {
+    expect(parsePromoteChoice("y")).toBe("promote-org");
+    expect(parsePromoteChoice("Y")).toBe("promote-org");
+    expect(parsePromoteChoice("yes")).toBe("promote-org");
+    expect(parsePromoteChoice("YES")).toBe("promote-org");
+  });
+
+  test("formatDriftPrompt skips diff URL for non-github source_url", () => {
+    const p = formatDriftPrompt({ canonical: "x", pinned_sha: "111", current_sha: "222", source_url: "https://gitlab.com/x/y" });
+    expect(p).not.toContain("/compare/");
+    expect(p).toContain("111");
+    expect(p).toContain("222");
+  });
 });

@@ -1,31 +1,23 @@
 import { $ } from "bun";
 import { readFileSync } from "node:fs";
 import { paths } from "../paths.ts";
-import type { InstallContext, InstallResult } from "./types.ts";
+import { runInstaller, InstallFailed } from "./run.ts";
+import type { InstallContext, InstallOutcome } from "./types.ts";
 
-export async function installPlugin(ctx: InstallContext): Promise<InstallResult> {
-  const result: InstallResult = {
-    capability_id: ctx.capability_id, status: "failed", source_sha: null, trust_action: "none",
-    verified: false, files: [], errors: [],
-  };
-  try {
-    const proc = await $`claude plugin install ${ctx.canonical_name}`.quiet().nothrow();
-    if (proc.exitCode !== 0) {
-      result.errors.push(proc.stderr.toString());
-      return result;
-    }
+export function installPlugin(ctx: InstallContext): Promise<InstallOutcome> {
+  return runInstaller(ctx, async (c) => {
+    const proc = await $`claude plugin install ${c.canonical_name}`.quiet().nothrow();
+    if (proc.exitCode !== 0) throw new InstallFailed(proc.stderr.toString());
+
     const manifest = JSON.parse(readFileSync(paths.claudePluginsManifest, "utf8"));
-    const entries = manifest.plugins?.[ctx.canonical_name];
-    if (entries?.[0]) {
-      result.source_sha = entries[0].gitCommitSha ?? null;
-      result.files = [entries[0].installPath];
-      result.status = "installed";
-      result.verified = true;
-    } else {
-      result.errors.push("Plugin manifest entry not found after install");
-    }
-  } catch (e) {
-    result.errors.push(String(e));
-  }
-  return result;
+    const entry = manifest.plugins?.[c.canonical_name]?.[0];
+    if (!entry) throw new InstallFailed("Plugin manifest entry not found after install");
+
+    return {
+      status: "installed",
+      source_sha: entry.gitCommitSha ?? null,
+      files: [entry.installPath],
+      verified: true,
+    };
+  });
 }
