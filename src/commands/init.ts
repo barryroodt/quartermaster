@@ -36,7 +36,7 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
   if (args.force && existsSync(dbPath)) rmSync(dbPath);
 
   const enabled = args.enabledPlugins ?? new Set<string>();
-  const records = [
+  const syncRecords = [
     ...enumerateSkills(join(args.claudeDir, "skills")),
     ...enumeratePlugins(join(args.claudeDir, "plugins/installed_plugins.json"), enabled),
     ...enumerateMdTree(join(args.claudeDir, "commands"), "command"),
@@ -45,7 +45,7 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
   ];
 
   if (args.check) {
-    const counts = countBySource(records);
+    const counts = countBySource(syncRecords);
     return { ok: true, counts, problems };
   }
 
@@ -54,7 +54,7 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
   migrate(db);
   if (args.refreshMcp) db.exec("DELETE FROM mcp_tool_cache");
   const mcpRecords = await enumerateMcp(args.mcpServers, db, args.mcpFetcher);
-  records.push(...mcpRecords);
+  const records = [...syncRecords, ...mcpRecords];
   applyRecords(db, records);
   db.close();
 
