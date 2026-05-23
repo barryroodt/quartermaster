@@ -1,0 +1,22 @@
+{
+  "name": "quartermaster",
+  "version": "0.1.0",
+  "description": "Discovery plugin — surveys skills, plugins, MCP servers, MCP tools, and curated CLIs; surfaces what's relevant before planning. FTS5 + Claude rerank, trust allowlist with SHA pins.",
+  "author": "Barry Roodt",
+  "license": "MIT",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun ${CLAUDE_PLUGIN_ROOT}/src/hooks/prompt-hook.ts",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  },
+  "commands": ["./commands/qm.md"]
+}
