@@ -47,6 +47,9 @@ export async function runSurvey(args: SurveyArgs): Promise<SurveyResult> {
     stop = ranked.stop_reason;
     const byId = new Map(hits.map(h => [h.id, h]));
     topHits = ranked.ranked.map(r => byId.get(r.id)).filter((h): h is FtsHit => !!h);
+    if (topHits.length < ranked.ranked.length) {
+      console.warn(`[quartermaster] rerank returned ${ranked.ranked.length - topHits.length} unknown ids; dropped`);
+    }
   }
 
   const formatted = formatResults(topHits, trust);
