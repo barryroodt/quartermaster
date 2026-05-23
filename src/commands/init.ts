@@ -20,7 +20,6 @@ export interface InitArgs {
   mcpFetcher: ToolsListFetcher;
   force?: boolean;
   check?: boolean;
-  refreshCli?: boolean;
   refreshMcp?: boolean;
   enabledPlugins?: Set<string>;
 }
