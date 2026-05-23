@@ -30,16 +30,18 @@ quartermaster/
 │   │   ├── connection.ts            SQLite WAL connection factory
 │   │   └── migrate.ts               Schema-version table + apply
 │   ├── inventory/
-│   │   ├── hash.ts                  Input-signature hash
-│   │   ├── description.ts           General markdown extractor + 2 adapters
+│   │   ├── hash.ts                  Input-signature hash + content hash
+│   │   ├── description.ts           General markdown extractor + 2 adapters (exports parseFrontmatter)
+│   │   ├── types.ts                 CapabilityRecord + buildRecord factory
 │   │   ├── enum-skills.ts           Skill enumerator
 │   │   ├── enum-plugins.ts          Plugin enumerator
-│   │   ├── enum-commands.ts         Command enumerator
-│   │   ├── enum-agents.ts           Agent enumerator
+│   │   ├── enum-md-tree.ts          Command + agent enumerator (shared md-tree walker)
 │   │   ├── enum-mcp.ts              MCP server + tools enumerator
 │   │   ├── enum-cli.ts              CLI enumerator
 │   │   ├── cli-known.json           Curated CLI manifest
-│   │   └── indexer.ts               Orchestrate enumerators → diff → apply
+│   │   └── indexer.ts               Orchestrate enumerators → diff → apply (exports COLS)
+│   ├── util/
+│   │   └── which.ts                 POSIX PATH walker (isFile + exec bit)
 │   ├── trust/
 │   │   ├── patterns.ts              Glob match + validation
 │   │   ├── derive.ts                Compute trust_level from source_url
@@ -146,12 +148,13 @@ quartermaster/
 
 ```
 node_modules/
-bun.lock
 *.log
 .DS_Store
 ~/.quartermaster/
 dist/
 ```
+
+> **Note:** `bun.lock` is intentionally tracked (lockfiles must be committed for reproducible installs). Do NOT add it to `.gitignore`.
 
 - [ ] **Step 4: Write the failing test for `paths.ts`**
 
@@ -240,6 +243,10 @@ git commit -m "feat: project scaffolding and centralised paths module"
 - Create: `src/db/connection.ts`
 - Create: `src/db/migrate.ts`
 - Create: `tests/unit/migrate.test.ts`
+
+> **Convention — time columns:** Every time-typed column in this schema stores **epoch seconds** (`INTEGER NOT NULL`). Producers must compute `Math.floor(Date.now() / 1000)`, never `Date.now()` (which is ms). Mixing units silently corrupts cache-staleness, drift-window, and audit-history logic.
+>
+> **Convention — TS relative imports:** All production-code relative imports MUST include the `.ts` extension (e.g. `from "../paths.ts"`). `tsconfig.json` has `allowImportingTsExtensions: true`. Test files import without the extension (`bun:test` resolution differs).
 
 - [ ] **Step 1: Write `src/db/schema.sql`**
 
@@ -340,7 +347,7 @@ export function openDb(path: string = paths.inventoryDb): Database {
 Create `tests/unit/migrate.test.ts`:
 
 ```typescript
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -349,32 +356,35 @@ import { migrate, currentVersion } from "../../src/db/migrate";
 
 let tmpDir: string;
 let dbPath: string;
+let db: ReturnType<typeof openDb> | null = null;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "qm-test-"));
   dbPath = join(tmpDir, "test.db");
+  db = null;
+});
+
+afterEach(() => {
+  if (db) { db.close(); db = null; }
+  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("migrate", () => {
   test("applies schema to empty db, reaches version 1", () => {
-    const db = openDb(dbPath);
+    db = openDb(dbPath);
     migrate(db);
     expect(currentVersion(db)).toBe(1);
-    db.close();
-    rmSync(tmpDir, { recursive: true });
   });
 
   test("is idempotent — second run is a no-op", () => {
-    const db = openDb(dbPath);
+    db = openDb(dbPath);
     migrate(db);
     migrate(db);
     expect(currentVersion(db)).toBe(1);
-    db.close();
-    rmSync(tmpDir, { recursive: true });
   });
 
   test("creates capabilities, install_history, trust_pins, mcp_tool_cache tables", () => {
-    const db = openDb(dbPath);
+    db = openDb(dbPath);
     migrate(db);
     const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
     const names = tables.map(t => t.name);
@@ -383,11 +393,11 @@ describe("migrate", () => {
     expect(names).toContain("trust_pins");
     expect(names).toContain("mcp_tool_cache");
     expect(names).toContain("capabilities_fts");
-    db.close();
-    rmSync(tmpDir, { recursive: true });
   });
 });
 ```
+
+> **Test cleanup convention:** Every test that touches the filesystem or opens a DB MUST use `afterEach` for cleanup, never inline at the end of the test body. Inline cleanup leaks the tempdir on any `expect()` failure or thrown error and poisons subsequent runs. Apply this pattern to every test file going forward (Tasks 5–10 and beyond).
 
 - [ ] **Step 4: Run to verify failure**
 
@@ -408,8 +418,9 @@ export function currentVersion(db: Database): number {
   try {
     const row = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number | null } | null;
     return row?.v ?? 0;
-  } catch {
-    return 0;
+  } catch (e) {
+    if (e instanceof Error && /no such table/.test(e.message)) return 0;
+    throw e;
   }
 }
 
@@ -418,10 +429,12 @@ export function migrate(db: Database): void {
   db.exec(schema);
   const v = currentVersion(db);
   if (v < TARGET_VERSION) {
-    db.query("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)").run(TARGET_VERSION, Date.now());
+    db.query("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)").run(TARGET_VERSION, Math.floor(Date.now() / 1000));
   }
 }
 ```
+
+> **Catch narrowing:** `currentVersion` only swallows the specific "no such table" error from a virgin DB. Other failures (corruption, permission, locking) must propagate — a blanket `catch {}` would silently rebuild the schema versioning on top of an in-flight error.
 
 - [ ] **Step 6: Run to verify pass**
 
@@ -448,11 +461,21 @@ git commit -m "feat: SQLite schema, WAL connection, idempotent migration runner"
 Create `tests/unit/hash.test.ts`:
 
 ```typescript
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { signatureHash } from "../../src/inventory/hash";
+
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "qm-hash-"));
+});
+
+afterEach(() => {
+  if (tmp) rmSync(tmp, { recursive: true, force: true });
+});
 
 describe("signatureHash", () => {
   test("returns 12-char hex string", () => {
@@ -461,23 +484,19 @@ describe("signatureHash", () => {
   });
 
   test("missing files contribute empty mtime, deterministically", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-hash-"));
     const path1 = join(tmp, "nonexistent");
     const h1 = signatureHash([path1]);
     const h2 = signatureHash([path1]);
     expect(h1).toBe(h2);
-    rmSync(tmp, { recursive: true });
   });
 
   test("changing a tracked file's mtime changes the hash", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-hash-"));
     const p = join(tmp, "f");
     writeFileSync(p, "hello");
     const h1 = signatureHash([p]);
     utimesSync(p, new Date(Date.now() + 10_000), new Date(Date.now() + 10_000));
     const h2 = signatureHash([p]);
     expect(h1).not.toBe(h2);
-    rmSync(tmp, { recursive: true });
   });
 });
 ```
@@ -492,6 +511,11 @@ Expected: FAIL — `Cannot find module '../../src/inventory/hash'`
 ```typescript
 import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { paths as appPaths } from "../paths.ts";
+
+export function contentHash(description: string | null, keywords: string | null): string {
+  return createHash("sha1").update(`${description ?? ""}\n${keywords ?? ""}`).digest("hex").slice(0, 12);
+}
 
 export function signatureHash(paths: string[]): string {
   const parts: string[] = [];
@@ -507,18 +531,21 @@ export function signatureHash(paths: string[]): string {
 }
 
 export function defaultSignatureInputs(): string[] {
-  const HOME = process.env.HOME ?? "";
   return [
-    `${HOME}/.claude/plugins/installed_plugins.json`,
-    `${HOME}/.claude/settings.json`,
-    `${HOME}/.claude.json`,
-    `${HOME}/.claude/skills`,
-    `${HOME}/.claude/commands`,
-    `${HOME}/.claude/agents`,
-    `${HOME}/.quartermaster/cli-extras.json`,
+    appPaths.claudePluginsManifest,
+    appPaths.claudeSettings,
+    appPaths.claudeJson,
+    appPaths.claudeSkills,
+    appPaths.claudeCommands,
+    appPaths.claudeAgents,
+    appPaths.cliExtras,
   ];
 }
 ```
+
+> **`contentHash` lives here, not in `types.ts`:** Both `signatureHash` (cache-key for input files) and `contentHash` (per-record drift detection) are hashing helpers. Keep them in the same module so the hashing surface is one file. `types.ts` stays purely declarative.
+>
+> **`defaultSignatureInputs` consumes `paths`:** Do not rebuild `${HOME}/.claude/...` strings here — every path the indexer cares about already lives in `src/paths.ts` (Task 1). Re-deriving them invites drift.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -606,6 +633,14 @@ describe("extractFromJson", () => {
   test("returns null if no description", () => {
     expect(extractFromJson('{"name":"x"}')).toBeNull();
   });
+
+  test("returns null on invalid JSON", () => {
+    expect(extractFromJson("{not json")).toBeNull();
+  });
+
+  test("returns null when .description is not a string", () => {
+    expect(extractFromJson('{"description": 42}')).toBeNull();
+  });
 });
 ```
 
@@ -619,7 +654,7 @@ Expected: FAIL — module not found
 ```typescript
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
-function parseFrontmatter(md: string): { fm: Record<string, string>; body: string } {
+export function parseFrontmatter(md: string): { fm: Record<string, string>; body: string } {
   const m = md.match(FRONTMATTER);
   if (!m) return { fm: {}, body: md };
   const fm: Record<string, string> = {};
@@ -651,7 +686,9 @@ export function extractFromJson(json: string): string | null {
 - [ ] **Step 5: Run to verify pass**
 
 Run: `bun test tests/unit/description.test.ts`
-Expected: PASS — 6 tests pass
+Expected: PASS — 8 tests pass
+
+> **`parseFrontmatter` is exported:** Enumerators (skills) need access to `fm.name` for canonical naming. Re-implementing the frontmatter regex in each enumerator (as the original plan hinted) duplicates the parser and risks drift. Export it once from `description.ts` and reuse.
 
 - [ ] **Step 6: Commit**
 
@@ -692,26 +729,72 @@ export interface CapabilityRecord {
   content_hash: string;
 }
 
-import { createHash } from "node:crypto";
-export function contentHash(description: string | null, keywords: string | null): string {
-  return createHash("sha1").update(`${description ?? ""}\n${keywords ?? ""}`).digest("hex").slice(0, 12);
+export interface BuildRecordInput {
+  id: string;
+  source_type: SourceType;
+  name: string;
+  canonical_name: string;
+  description?: string | null;
+  keywords?: string | null;
+  installed?: 0 | 1;
+  enabled?: 0 | 1 | null;
+  bundle_id?: string | null;
+  bundle_version?: string | null;
+  bundle_path?: string | null;
+  source_url?: string | null;
+  source_sha?: string | null;
+  last_seen_epoch: number;
+  content_hash: string;
+}
+
+export function buildRecord(input: BuildRecordInput): CapabilityRecord {
+  return {
+    id: input.id,
+    source_type: input.source_type,
+    name: input.name,
+    canonical_name: input.canonical_name,
+    description: input.description ?? null,
+    keywords: input.keywords ?? null,
+    installed: input.installed ?? 1,
+    enabled: input.enabled ?? null,
+    bundle_id: input.bundle_id ?? null,
+    bundle_version: input.bundle_version ?? null,
+    bundle_path: input.bundle_path ?? null,
+    source_url: input.source_url ?? null,
+    source_sha: input.source_sha ?? null,
+    last_seen_epoch: input.last_seen_epoch,
+    content_hash: input.content_hash,
+  };
 }
 ```
+
+> **Why a `buildRecord` factory:** Every enumerator emits `CapabilityRecord`, but each source-type only meaningfully fills a few fields — the rest must default to `null`/`0`/`1` to match the typed shape. Without a factory, each enumerator carries 15-line literal objects mostly full of `: null`s (the original draft of Tasks 5–9), which is noisy and silently rots when fields are added. The factory keeps required fields explicit and defaults the optional ones in one place.
+>
+> **`contentHash` is NOT here.** It belongs in `src/inventory/hash.ts` next to `signatureHash` (Task 3). Do not duplicate.
 
 - [ ] **Step 2: Write the failing test**
 
 `tests/unit/enum-skills.test.ts`:
 
 ```typescript
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { enumerateSkills } from "../../src/inventory/enum-skills";
 
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "qm-skills-"));
+});
+
+afterEach(() => {
+  if (tmp) rmSync(tmp, { recursive: true, force: true });
+});
+
 describe("enumerateSkills", () => {
   test("finds SKILL.md files under a root, parses frontmatter", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-skills-"));
     mkdirSync(join(tmp, "foo"));
     writeFileSync(join(tmp, "foo", "SKILL.md"), `---
 name: foo
@@ -725,18 +808,14 @@ Body.`);
     expect(records[0].description).toBe("Foo skill.");
     expect(records[0].canonical_name).toBe("foo");
     expect(records[0].installed).toBe(1);
-    rmSync(tmp, { recursive: true });
   });
 
   test("skips directories without SKILL.md", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-skills-"));
     mkdirSync(join(tmp, "empty"));
     expect(enumerateSkills(tmp)).toEqual([]);
-    rmSync(tmp, { recursive: true });
   });
 
   test("scoped plugin skills get plugin-slug:skill-slug canonical_name", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-skills-"));
     mkdirSync(join(tmp, "bar"));
     writeFileSync(join(tmp, "bar", "SKILL.md"), `---
 name: bar
@@ -745,7 +824,6 @@ description: Bar skill.
     const records = enumerateSkills(tmp, { pluginSlug: "myplugin" });
     expect(records[0].canonical_name).toBe("myplugin:bar");
     expect(records[0].bundle_id).toBe("myplugin");
-    rmSync(tmp, { recursive: true });
   });
 });
 ```
@@ -758,48 +836,55 @@ Expected: FAIL — module not found
 - [ ] **Step 4: Implement `src/inventory/enum-skills.ts`**
 
 ```typescript
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractFromMarkdown } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { extractFromMarkdown, parseFrontmatter } from "./description.ts";
+import { contentHash } from "./hash.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 
-const FM_NAME = /^name:\s*(.+)$/m;
-
-export interface EnumOpts { pluginSlug?: string }
+export interface EnumOpts {
+  pluginSlug?: string;
+}
 
 export function enumerateSkills(root: string, opts: EnumOpts = {}): CapabilityRecord[] {
+  const now = Math.floor(Date.now() / 1000);
   const out: CapabilityRecord[] = [];
   let entries: string[];
-  try { entries = readdirSync(root); } catch { return out; }
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return out;
+  }
   for (const entry of entries) {
     const skillPath = join(root, entry, "SKILL.md");
     let content: string;
-    try { content = readFileSync(skillPath, "utf8"); } catch { continue; }
-    const m = content.match(FM_NAME);
-    const name = m?.[1].trim() ?? entry;
+    try {
+      content = readFileSync(skillPath, "utf8");
+    } catch {
+      continue;
+    }
+    const name = parseFrontmatter(content).fm.name ?? entry;
     const description = extractFromMarkdown(content);
     const canonical = opts.pluginSlug ? `${opts.pluginSlug}:${name}` : name;
-    out.push({
+    out.push(buildRecord({
       id: `skill:${canonical}`,
       source_type: "skill",
       name,
       canonical_name: canonical,
       description,
-      keywords: null,
-      installed: 1,
-      enabled: null,
       bundle_id: opts.pluginSlug ?? null,
-      bundle_version: null,
       bundle_path: join(root, entry),
-      source_url: null,
-      source_sha: null,
-      last_seen_epoch: Math.floor(Date.now() / 1000),
+      last_seen_epoch: now,
       content_hash: contentHash(description, null),
-    });
+    }));
   }
   return out;
 }
 ```
+
+> **Reuse `parseFrontmatter`:** Do NOT inline a `FM_NAME = /^name:\s*(.+)$/m` regex here — `parseFrontmatter` from `description.ts` already parses the whole frontmatter block. The skill enumerator just reads the `name` field off the parsed result.
+>
+> **`now` is hoisted to the top of the function** so every record in the same enumeration pass shares one timestamp. Cheap drift-detection invariant: records produced in the same scan have identical `last_seen_epoch`.
 
 - [ ] **Step 5: Run to verify pass**
 
@@ -826,28 +911,41 @@ git commit -m "feat: CapabilityRecord type + skill enumerator"
 `tests/unit/enum-plugins.test.ts`:
 
 ```typescript
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { enumeratePlugins } from "../../src/inventory/enum-plugins";
 
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "qm-plugins-"));
+});
+
+afterEach(() => {
+  if (tmp) rmSync(tmp, { recursive: true, force: true });
+});
+
 describe("enumeratePlugins", () => {
   test("reads installed_plugins.json, fetches description from each plugin.json", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-plugins-"));
     const installDir = join(tmp, "foo-plugin");
     mkdirSync(join(installDir, ".claude-plugin"), { recursive: true });
-    writeFileSync(join(installDir, ".claude-plugin", "plugin.json"),
-      JSON.stringify({ name: "foo-plugin", description: "A plugin." }));
+    writeFileSync(
+      join(installDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "foo-plugin", description: "A plugin." }),
+    );
     const manifest = {
       version: 2,
       plugins: {
-        "foo@bar": [{
-          scope: "user",
-          installPath: installDir,
-          version: "1.0.0",
-          gitCommitSha: "abc123",
-        }],
+        "foo@bar": [
+          {
+            scope: "user",
+            installPath: installDir,
+            version: "1.0.0",
+            gitCommitSha: "abc123",
+          },
+        ],
       },
     };
     const manifestPath = join(tmp, "installed_plugins.json");
@@ -862,24 +960,47 @@ describe("enumeratePlugins", () => {
     expect(records[0].bundle_version).toBe("1.0.0");
     expect(records[0].source_sha).toBe("abc123");
     expect(records[0].enabled).toBe(1);
-    rmSync(tmp, { recursive: true });
   });
 
   test("marks plugin not in enabled set as enabled:0", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-plugins-"));
     const installDir = join(tmp, "foo-plugin");
     mkdirSync(join(installDir, ".claude-plugin"), { recursive: true });
-    writeFileSync(join(installDir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "foo-plugin" }));
-    const manifest = { version: 2, plugins: { "foo@bar": [{ scope: "user", installPath: installDir, version: "1.0.0" }] } };
+    writeFileSync(
+      join(installDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "foo-plugin" }),
+    );
+    const manifest = {
+      version: 2,
+      plugins: {
+        "foo@bar": [{ scope: "user", installPath: installDir, version: "1.0.0" }],
+      },
+    };
     const manifestPath = join(tmp, "installed_plugins.json");
     writeFileSync(manifestPath, JSON.stringify(manifest));
     const records = enumeratePlugins(manifestPath, new Set());
     expect(records[0].enabled).toBe(0);
-    rmSync(tmp, { recursive: true });
   });
 
   test("returns empty array if manifest absent", () => {
     expect(enumeratePlugins("/nonexistent/path.json", new Set())).toEqual([]);
+  });
+
+  test("returns empty array on corrupt manifest JSON", () => {
+    const manifestPath = join(tmp, "installed_plugins.json");
+    writeFileSync(manifestPath, "{ not json");
+    expect(enumeratePlugins(manifestPath, new Set())).toEqual([]);
+  });
+
+  test("emits record with null description when plugin.json missing", () => {
+    const installDir = join(tmp, "no-pj-plugin");
+    mkdirSync(installDir, { recursive: true });
+    // intentionally omit .claude-plugin/plugin.json
+    const manifest = { version: 2, plugins: { "nopj@m": [{ scope: "user", installPath: installDir, version: "1.0.0" }] } };
+    const manifestPath = join(tmp, "installed_plugins.json");
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const records = enumeratePlugins(manifestPath, new Set());
+    expect(records.length).toBe(1);
+    expect(records[0].description).toBeNull();
   });
 });
 ```
@@ -895,16 +1016,36 @@ Expected: FAIL — module not found
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractFromJson } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { contentHash } from "./hash.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 
-interface PluginEntry { scope: string; installPath: string; version: string; gitCommitSha?: string }
-interface Manifest { version: number; plugins: Record<string, PluginEntry[]> }
+interface PluginEntry {
+  scope: string;
+  installPath: string;
+  version: string;
+  gitCommitSha?: string;
+}
+
+interface Manifest {
+  version: number;
+  plugins: Record<string, PluginEntry[]>;
+}
 
 export function enumeratePlugins(manifestPath: string, enabled: Set<string>): CapabilityRecord[] {
+  const now = Math.floor(Date.now() / 1000);
   let raw: string;
-  try { raw = readFileSync(manifestPath, "utf8"); } catch { return []; }
+  try {
+    raw = readFileSync(manifestPath, "utf8");
+  } catch {
+    return [];
+  }
   let manifest: Manifest;
-  try { manifest = JSON.parse(raw); } catch { return []; }
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    console.warn("[quartermaster] installed_plugins.json is malformed; treating as empty");
+    return [];
+  }
   const out: CapabilityRecord[] = [];
   for (const [pluginId, entries] of Object.entries(manifest.plugins ?? {})) {
     const entry = entries[0];
@@ -915,32 +1056,31 @@ export function enumeratePlugins(manifestPath: string, enabled: Set<string>): Ca
       description = extractFromJson(pj);
     } catch {}
     const name = pluginId.split("@")[0];
-    out.push({
+    out.push(buildRecord({
       id: `plugin:${pluginId}`,
       source_type: "plugin",
       name,
       canonical_name: pluginId,
       description,
-      keywords: null,
-      installed: 1,
       enabled: enabled.has(pluginId) ? 1 : 0,
       bundle_id: pluginId,
       bundle_version: entry.version,
       bundle_path: entry.installPath,
-      source_url: null,
       source_sha: entry.gitCommitSha ?? null,
-      last_seen_epoch: Math.floor(Date.now() / 1000),
+      last_seen_epoch: now,
       content_hash: contentHash(description, null),
-    });
+    }));
   }
   return out;
 }
 ```
 
+> **Warn on corrupt manifest, don't go silent:** A missing manifest is normal (no plugins installed), but a malformed JSON is a real failure — most likely a half-written file from a crashed install. Returning `[]` silently makes the indexer drop every plugin record on the next pass. The `console.warn` makes the failure visible without crashing the indexer.
+
 - [ ] **Step 4: Run to verify pass**
 
 Run: `bun test tests/unit/enum-plugins.test.ts`
-Expected: PASS — 3 tests pass
+Expected: PASS — 5 tests pass
 
 - [ ] **Step 5: Commit**
 
@@ -951,198 +1091,184 @@ git commit -m "feat: plugin enumerator with enabled-state from settings"
 
 ---
 
-### Task 7: Command + agent enumerators
+### Task 7: Command + agent enumerator (shared `enum-md-tree`)
 
 **Files:**
-- Create: `src/inventory/enum-commands.ts`
-- Create: `src/inventory/enum-agents.ts`
-- Create: `tests/unit/enum-commands.test.ts`
-- Create: `tests/unit/enum-agents.test.ts`
+- Create: `src/inventory/enum-md-tree.ts`
+- Create: `tests/unit/enum-md-tree.test.ts`
 
-- [ ] **Step 1: Write `tests/unit/enum-commands.test.ts`**
+> **One module, two `sourceType` values.** Commands and agents are both "walk an .md tree, parse frontmatter, emit records." The only differences are (a) the `source_type` value and (b) the plugin-canonical separator (`/` for commands, `:` for agents). Keeping two parallel files (`enum-commands.ts` / `enum-agents.ts`) duplicates the walker, the frontmatter parsing, the `buildRecord` call, and the tests — and any future fix has to be applied twice. Collapse into one function `enumerateMdTree(root, sourceType, opts)` with a `SEPARATOR` lookup.
+
+- [ ] **Step 1: Write `tests/unit/enum-md-tree.test.ts`**
 
 ```typescript
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { enumerateCommands } from "../../src/inventory/enum-commands";
+import { enumerateMdTree } from "../../src/inventory/enum-md-tree";
 
-describe("enumerateCommands", () => {
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "qm-mdt-"));
+});
+
+afterEach(() => {
+  if (tmp) rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("enumerateMdTree (command)", () => {
   test("finds .md files, parses frontmatter description", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-cmd-"));
     writeFileSync(join(tmp, "foo.md"), `---
 description: Foo command.
 ---
 Body.`);
-    const records = enumerateCommands(tmp);
+    const records = enumerateMdTree(tmp, "command");
     expect(records.length).toBe(1);
     expect(records[0].source_type).toBe("command");
     expect(records[0].name).toBe("foo");
     expect(records[0].canonical_name).toBe("foo");
     expect(records[0].description).toBe("Foo command.");
-    rmSync(tmp, { recursive: true });
   });
 
   test("plugin scope prefixes canonical_name", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-cmd-"));
     writeFileSync(join(tmp, "bar.md"), `---
 description: Bar.
 ---`);
-    const records = enumerateCommands(tmp, { pluginSlug: "myplug" });
+    const records = enumerateMdTree(tmp, "command", { pluginSlug: "myplug" });
     expect(records[0].canonical_name).toBe("myplug/bar");
-    rmSync(tmp, { recursive: true });
+  });
+
+  test("recurses into subdirectories", () => {
+    mkdirSync(join(tmp, "sub"), { recursive: true });
+    writeFileSync(join(tmp, "sub", "nested.md"), `---
+description: Nested.
+---`);
+    const records = enumerateMdTree(tmp, "command");
+    expect(records.find(r => r.name === "nested")).toBeDefined();
   });
 });
-```
 
-- [ ] **Step 2: Implement `src/inventory/enum-commands.ts`**
-
-```typescript
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, basename, extname } from "node:path";
-import { extractFromMarkdown } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
-
-export interface EnumOpts { pluginSlug?: string }
-
-function walkMd(root: string, out: string[] = []): string[] {
-  let entries: string[];
-  try { entries = readdirSync(root); } catch { return out; }
-  for (const e of entries) {
-    const p = join(root, e);
-    let s; try { s = statSync(p); } catch { continue; }
-    if (s.isDirectory()) walkMd(p, out);
-    else if (extname(e) === ".md") out.push(p);
-  }
-  return out;
-}
-
-export function enumerateCommands(root: string, opts: EnumOpts = {}): CapabilityRecord[] {
-  return walkMd(root).map(path => {
-    const content = readFileSync(path, "utf8");
-    const name = basename(path, ".md");
-    const description = extractFromMarkdown(content);
-    const canonical = opts.pluginSlug ? `${opts.pluginSlug}/${name}` : name;
-    return {
-      id: `command:${canonical}`,
-      source_type: "command" as const,
-      name,
-      canonical_name: canonical,
-      description,
-      keywords: null,
-      installed: 1 as const,
-      enabled: null,
-      bundle_id: opts.pluginSlug ?? null,
-      bundle_version: null,
-      bundle_path: path,
-      source_url: null,
-      source_sha: null,
-      last_seen_epoch: Math.floor(Date.now() / 1000),
-      content_hash: contentHash(description, null),
-    };
-  });
-}
-```
-
-- [ ] **Step 3: Run to verify**
-
-Run: `bun test tests/unit/enum-commands.test.ts`
-Expected: PASS
-
-- [ ] **Step 4: Mirror for agents**
-
-`tests/unit/enum-agents.test.ts` (identical shape; replace `enumerateCommands` with `enumerateAgents`, prefix `agent:` and canonical separator `:`):
-
-```typescript
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { enumerateAgents } from "../../src/inventory/enum-agents";
-
-describe("enumerateAgents", () => {
+describe("enumerateMdTree (agent)", () => {
   test("finds .md files, source_type=agent", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-agt-"));
     writeFileSync(join(tmp, "foo.md"), `---
 description: Foo agent.
 ---`);
-    const records = enumerateAgents(tmp);
+    const records = enumerateMdTree(tmp, "agent");
     expect(records.length).toBe(1);
     expect(records[0].source_type).toBe("agent");
     expect(records[0].canonical_name).toBe("foo");
-    rmSync(tmp, { recursive: true });
   });
 
   test("plugin scope uses colon separator", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "qm-agt-"));
     writeFileSync(join(tmp, "bar.md"), `---
 description: Bar.
 ---`);
-    const records = enumerateAgents(tmp, { pluginSlug: "myplug" });
+    const records = enumerateMdTree(tmp, "agent", { pluginSlug: "myplug" });
     expect(records[0].canonical_name).toBe("myplug:bar");
-    rmSync(tmp, { recursive: true });
+  });
+
+  test("recurses into subdirectories", () => {
+    mkdirSync(join(tmp, "sub"), { recursive: true });
+    writeFileSync(join(tmp, "sub", "nested.md"), `---
+description: Nested.
+---`);
+    const records = enumerateMdTree(tmp, "agent");
+    expect(records.find(r => r.name === "nested")).toBeDefined();
   });
 });
 ```
 
-`src/inventory/enum-agents.ts`:
+- [ ] **Step 2: Implement `src/inventory/enum-md-tree.ts`**
 
 ```typescript
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { extractFromMarkdown } from "./description.ts";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { contentHash } from "./hash.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 
-export interface EnumOpts { pluginSlug?: string }
+export interface EnumOpts {
+  pluginSlug?: string;
+}
 
 function walkMd(root: string, out: string[] = []): string[] {
   let entries: string[];
-  try { entries = readdirSync(root); } catch { return out; }
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return out;
+  }
   for (const e of entries) {
     const p = join(root, e);
-    let s; try { s = statSync(p); } catch { continue; }
+    let s;
+    try {
+      s = lstatSync(p);
+    } catch {
+      continue;
+    }
     if (s.isDirectory()) walkMd(p, out);
     else if (extname(e) === ".md") out.push(p);
   }
   return out;
 }
 
-export function enumerateAgents(root: string, opts: EnumOpts = {}): CapabilityRecord[] {
-  return walkMd(root).map(path => {
-    const content = readFileSync(path, "utf8");
+const SEPARATOR: Record<"command" | "agent", string> = {
+  command: "/",
+  agent: ":",
+};
+
+export function enumerateMdTree(
+  root: string,
+  sourceType: "command" | "agent",
+  opts: EnumOpts = {},
+): CapabilityRecord[] {
+  const now = Math.floor(Date.now() / 1000);
+  const sep = SEPARATOR[sourceType];
+  const out: CapabilityRecord[] = [];
+  for (const path of walkMd(root)) {
+    let content: string;
+    try {
+      content = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
     const name = basename(path, ".md");
     const description = extractFromMarkdown(content);
-    const canonical = opts.pluginSlug ? `${opts.pluginSlug}:${name}` : name;
-    return {
-      id: `agent:${canonical}`,
-      source_type: "agent" as const,
+    const canonical = opts.pluginSlug ? `${opts.pluginSlug}${sep}${name}` : name;
+    out.push(buildRecord({
+      id: `${sourceType}:${canonical}`,
+      source_type: sourceType,
       name,
       canonical_name: canonical,
       description,
-      keywords: null,
-      installed: 1 as const,
-      enabled: null,
       bundle_id: opts.pluginSlug ?? null,
-      bundle_version: null,
       bundle_path: path,
-      source_url: null,
-      source_sha: null,
-      last_seen_epoch: Math.floor(Date.now() / 1000),
+      last_seen_epoch: now,
       content_hash: contentHash(description, null),
-    };
-  });
+    }));
+  }
+  return out;
 }
 ```
 
-Run: `bun test tests/unit/enum-agents.test.ts`
-Expected: PASS
+> **`lstatSync`, not `statSync`:** `statSync` follows symlinks and recurses into the target — a symlink loop (`a → b → a`) sends the walker into infinite recursion and crashes the indexer. `lstatSync` reports the symlink itself, so the walker skips it (it's not a directory and not `.md`).
+>
+> **`try`/`catch` around `readFileSync` inside the loop:** A file that disappears between `readdirSync` and `readFileSync` (e.g. a plugin updating in the background) must not crash the whole enumeration. Skip the missing file and keep going.
+>
+> **Hoist `now`:** As in Task 5, all records from one scan share the same `last_seen_epoch`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Run to verify**
+
+Run: `bun test tests/unit/enum-md-tree.test.ts`
+Expected: PASS — 6 tests pass
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/inventory/enum-commands.ts src/inventory/enum-agents.ts tests/unit/enum-commands.test.ts tests/unit/enum-agents.test.ts
-git commit -m "feat: command and agent enumerators (markdown frontmatter)"
+git add src/inventory/enum-md-tree.ts tests/unit/enum-md-tree.test.ts
+git commit -m "feat: command and agent enumerator (shared md-tree walker)"
 ```
 
 ---
@@ -1158,7 +1284,7 @@ git commit -m "feat: command and agent enumerators (markdown frontmatter)"
 `tests/unit/enum-mcp.test.ts`:
 
 ```typescript
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1168,29 +1294,32 @@ import { enumerateMcp, type ToolsListFetcher } from "../../src/inventory/enum-mc
 
 let tmpDir: string;
 let dbPath: string;
+let db: ReturnType<typeof openDb> | null = null;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "qm-mcp-"));
   dbPath = join(tmpDir, "test.db");
+  db = null;
+});
+
+afterEach(() => {
+  if (db) { db.close(); db = null; }
+  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("enumerateMcp", () => {
   test("emits one mcp_server record per server config", async () => {
-    const db = openDb(dbPath);
-    migrate(db);
+    db = openDb(dbPath); migrate(db);
     const servers = { foo: { command: "/bin/foo", args: [] }, bar: { url: "https://bar/mcp" } };
     const fetcher: ToolsListFetcher = async () => [];
     const records = await enumerateMcp(servers, db, fetcher);
     const serverRecords = records.filter(r => r.source_type === "mcp_server");
     expect(serverRecords.length).toBe(2);
     expect(serverRecords.map(r => r.canonical_name).sort()).toEqual(["bar", "foo"]);
-    db.close();
-    rmSync(tmpDir, { recursive: true });
   });
 
   test("calls fetcher per server, emits mcp_tool records, caches by config hash", async () => {
-    const db = openDb(dbPath);
-    migrate(db);
+    db = openDb(dbPath); migrate(db);
     const servers = { foo: { command: "/bin/foo" } };
     const calls: string[] = [];
     const fetcher: ToolsListFetcher = async (name) => {
@@ -1206,20 +1335,15 @@ describe("enumerateMcp", () => {
     const r2 = await enumerateMcp(servers, db, fetcher);
     expect(calls.length).toBe(1);
     expect(r2.filter(r => r.source_type === "mcp_tool").length).toBe(1);
-    db.close();
-    rmSync(tmpDir, { recursive: true });
   });
 
   test("re-fetches when server config changes", async () => {
-    const db = openDb(dbPath);
-    migrate(db);
+    db = openDb(dbPath); migrate(db);
     let calls = 0;
     const fetcher: ToolsListFetcher = async () => { calls++; return [{ name: "t" }]; };
     await enumerateMcp({ foo: { command: "/v1" } }, db, fetcher);
     await enumerateMcp({ foo: { command: "/v2" } }, db, fetcher);
     expect(calls).toBe(2);
-    db.close();
-    rmSync(tmpDir, { recursive: true });
   });
 });
 ```
@@ -1229,9 +1353,15 @@ describe("enumerateMcp", () => {
 ```typescript
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { contentHash } from "./hash.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
 
-export type ToolsListFetcher = (serverName: string, config: unknown) => Promise<Array<{ name: string; description?: string }>>;
+export interface McpTool {
+  name: string;
+  description?: string;
+}
+
+export type ToolsListFetcher = (serverName: string, config: unknown) => Promise<McpTool[]>;
 
 function configHash(cfg: unknown): string {
   return createHash("sha1").update(JSON.stringify(cfg)).digest("hex").slice(0, 12);
@@ -1245,65 +1375,63 @@ export async function enumerateMcp(
   const out: CapabilityRecord[] = [];
   const now = Math.floor(Date.now() / 1000);
   for (const [name, cfg] of Object.entries(servers)) {
-    out.push({
+    const hash = configHash(cfg);
+
+    out.push(buildRecord({
       id: `mcp_server:${name}`,
       source_type: "mcp_server",
       name,
       canonical_name: name,
-      description: null,
-      keywords: null,
-      installed: 1,
-      enabled: null,
-      bundle_id: null,
-      bundle_version: null,
-      bundle_path: null,
-      source_url: null,
-      source_sha: configHash(cfg),
+      source_sha: hash,
       last_seen_epoch: now,
       content_hash: contentHash(null, null),
-    });
+    }));
 
-    const hash = configHash(cfg);
-    const cached = db.query("SELECT tools_json FROM mcp_tool_cache WHERE server_name = ? AND server_config_hash = ?")
-      .get(name, hash) as { tools_json: string } | null;
+    const cached = db.query("SELECT tools_json, server_config_hash FROM mcp_tool_cache WHERE server_name = ?")
+      .get(name) as { tools_json: string; server_config_hash: string } | null;
 
-    let tools: Array<{ name: string; description?: string }>;
-    if (cached) {
+    let tools: McpTool[];
+    let fetchOk = true;
+    if (cached && cached.server_config_hash === hash) {
       tools = JSON.parse(cached.tools_json);
     } else {
       try {
         tools = await fetcher(name, cfg);
       } catch {
         tools = [];
+        fetchOk = false;
       }
-      db.query("INSERT OR REPLACE INTO mcp_tool_cache (server_name, server_config_hash, tools_json, fetched_at) VALUES (?, ?, ?, ?)")
-        .run(name, hash, JSON.stringify(tools), now);
+      if (fetchOk) {
+        db.query("INSERT OR REPLACE INTO mcp_tool_cache (server_name, server_config_hash, tools_json, fetched_at) VALUES (?, ?, ?, ?)")
+          .run(name, hash, JSON.stringify(tools), now);
+      }
     }
 
     for (const t of tools) {
       const canonical = `mcp__${name}__${t.name}`;
-      out.push({
+      out.push(buildRecord({
         id: `mcp_tool:${canonical}`,
         source_type: "mcp_tool",
         name: t.name,
         canonical_name: canonical,
         description: t.description ?? null,
-        keywords: null,
-        installed: 1,
-        enabled: null,
         bundle_id: name,
-        bundle_version: null,
-        bundle_path: null,
-        source_url: null,
-        source_sha: null,
         last_seen_epoch: now,
         content_hash: contentHash(t.description ?? null, null),
-      });
+      }));
     }
   }
   return out;
 }
 ```
+
+> **Three subtle correctness points the original draft got wrong:**
+>
+> 1. **Hash once per iteration.** The first draft called `configHash(cfg)` twice — once for the server record's `source_sha`, once for the cache query. Compute `hash` once at the top of the loop.
+> 2. **Cache lookup matches by server name, validates hash in JS.** Querying `WHERE server_name = ? AND server_config_hash = ?` returns nothing when the hash changes — fine, but it also hides stale cache rows from cleanup. Look up by `server_name` alone and validate `server_config_hash === hash` in JS so the loop has visibility into "we have a cache row but it's stale."
+> 3. **Do NOT cache an empty array when the fetcher throws.** A transient fetch failure (network blip, MCP server still starting) returning `[]` is semantically very different from "this server genuinely has zero tools." Caching the empty result poisons every subsequent run for the lifetime of the cache key. Track `fetchOk` and skip the write on failure — next run retries.
+>
+> **Cache schema is unchanged** (`server_name` is `PRIMARY KEY`) — the explicit JS-side hash check is a smaller and clearer change than a composite primary key.
 
 - [ ] **Step 3: Run to verify pass**
 
@@ -1323,8 +1451,11 @@ git commit -m "feat: MCP server+tool enumerator with config-hash cache"
 
 **Files:**
 - Create: `src/inventory/cli-known.json`
+- Create: `src/util/which.ts`
 - Create: `src/inventory/enum-cli.ts`
 - Create: `tests/unit/enum-cli.test.ts`
+
+> **`which` lives in `src/util/`, not `enum-cli.ts`.** Other planned subsystems (gap-search registry verification, installer post-install probes) also need PATH resolution. Extracting `which()` to `src/util/which.ts` keeps `enum-cli.ts` focused on emitting records.
 
 - [ ] **Step 1: Seed `src/inventory/cli-known.json`**
 
@@ -1392,24 +1523,45 @@ describe("enumerateCli", () => {
 });
 ```
 
-- [ ] **Step 3: Implement `src/inventory/enum-cli.ts`**
+- [ ] **Step 3: Implement `src/util/which.ts`**
 
 ```typescript
-import { existsSync } from "node:fs";
-import { contentHash, type CapabilityRecord } from "./types.ts";
+import { existsSync, statSync } from "node:fs";
+
+// POSIX-only PATH walker. Splits on ':' (not Windows-aware); requires
+// regular file with at least one executable bit. Empty PATH segments
+// are skipped (avoids CWD-as-PATH footgun).
+export function which(bin: string): string | null {
+  const path = process.env.PATH ?? "";
+  for (const dir of path.split(":")) {
+    if (!dir) continue;
+    const candidate = `${dir}/${bin}`;
+    if (!existsSync(candidate)) continue;
+    try {
+      const s = statSync(candidate);
+      if (s.isFile() && (s.mode & 0o111) !== 0) return candidate;
+    } catch {
+      // statSync race or perm denial — skip and continue
+    }
+  }
+  return null;
+}
+```
+
+> **Why `isFile()` + exec bit, not just `existsSync`:** `existsSync(candidate)` returns true for directories, broken symlinks, and unreadable entries. `which` must mean "this PATH entry would actually run if invoked," not "this name appears in PATH."
+>
+> **Why skip empty PATH segments:** A `PATH` like `:/usr/bin` (leading colon) is POSIX-equivalent to "search CWD first." We don't want quartermaster picking up a `gh` from whatever directory the user happens to be `cd`'d into.
+
+- [ ] **Step 4: Implement `src/inventory/enum-cli.ts`**
+
+```typescript
+import { contentHash } from "./hash.ts";
+import { buildRecord, type CapabilityRecord } from "./types.ts";
+import { which } from "../util/which.ts";
 
 export interface CliKnown {
   description: string;
   registry: "brew" | "npm" | "cargo" | "system";
-}
-
-export function which(bin: string): string | null {
-  const path = process.env.PATH ?? "";
-  for (const dir of path.split(":")) {
-    const candidate = `${dir}/${bin}`;
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
 }
 
 export function enumerateCli(
@@ -1422,37 +1574,31 @@ export function enumerateCli(
   for (const [bin, meta] of Object.entries(merged)) {
     const path = which(bin);
     if (!path) continue;
-    out.push({
+    out.push(buildRecord({
       id: `cli:bin:${bin}`,
       source_type: "cli",
       name: bin,
       canonical_name: `bin:${bin}`,
       description: meta.description,
       keywords: meta.registry,
-      installed: 1,
-      enabled: null,
-      bundle_id: null,
-      bundle_version: null,
       bundle_path: path,
-      source_url: null,
-      source_sha: null,
       last_seen_epoch: now,
       content_hash: contentHash(meta.description, meta.registry),
-    });
+    }));
   }
   return out;
 }
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [ ] **Step 5: Run to verify pass**
 
 Run: `bun test tests/unit/enum-cli.test.ts`
 Expected: PASS — 3 tests pass
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/inventory/cli-known.json src/inventory/enum-cli.ts tests/unit/enum-cli.test.ts
+git add src/inventory/cli-known.json src/util/which.ts src/inventory/enum-cli.ts tests/unit/enum-cli.test.ts
 git commit -m "feat: CLI enumerator with curated manifest + user extras"
 ```
 
@@ -1469,21 +1615,28 @@ git commit -m "feat: CLI enumerator with curated manifest + user extras"
 `tests/integration/indexer.test.ts`:
 
 ```typescript
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../../src/db/connection";
 import { migrate } from "../../src/db/migrate";
-import { applyRecords, getAll } from "../../src/inventory/indexer";
+import { applyRecords, getAll, COLS } from "../../src/inventory/indexer";
 import type { CapabilityRecord } from "../../src/inventory/types";
 
 let tmpDir: string;
 let dbPath: string;
+let db: ReturnType<typeof openDb> | null = null;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "qm-idx-"));
   dbPath = join(tmpDir, "test.db");
+  db = null;
+});
+
+afterEach(() => {
+  if (db) { db.close(); db = null; }
+  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 function mkRecord(id: string, desc = "x"): CapabilityRecord {
@@ -1496,51 +1649,69 @@ function mkRecord(id: string, desc = "x"): CapabilityRecord {
 
 describe("indexer applyRecords", () => {
   test("inserts new records", () => {
-    const db = openDb(dbPath); migrate(db);
+    db = openDb(dbPath); migrate(db);
     applyRecords(db, [mkRecord("a"), mkRecord("b")]);
     expect(getAll(db).length).toBe(2);
-    db.close(); rmSync(tmpDir, { recursive: true });
   });
 
   test("updates changed content_hash, leaves unchanged rows alone", () => {
-    const db = openDb(dbPath); migrate(db);
+    db = openDb(dbPath); migrate(db);
     applyRecords(db, [mkRecord("a", "v1")]);
     applyRecords(db, [mkRecord("a", "v2")]);
     const all = getAll(db);
     expect(all.length).toBe(1);
     expect(all[0].description).toBe("v2");
-    db.close(); rmSync(tmpDir, { recursive: true });
   });
 
   test("removes records no longer present in current set", () => {
-    const db = openDb(dbPath); migrate(db);
+    db = openDb(dbPath); migrate(db);
     applyRecords(db, [mkRecord("a"), mkRecord("b")]);
     applyRecords(db, [mkRecord("a")]);
     expect(getAll(db).map(r => r.id)).toEqual(["a"]);
-    db.close(); rmSync(tmpDir, { recursive: true });
   });
 
   test("FTS5 picks up inserts", () => {
-    const db = openDb(dbPath); migrate(db);
+    db = openDb(dbPath); migrate(db);
     applyRecords(db, [mkRecord("foo", "kubernetes deploy helper")]);
     const hits = db.query("SELECT rowid FROM capabilities_fts WHERE capabilities_fts MATCH 'kubernetes'").all();
     expect(hits.length).toBe(1);
-    db.close(); rmSync(tmpDir, { recursive: true });
+  });
+
+  test("COLS matches schema column set", () => {
+    db = openDb(dbPath); migrate(db);
+    const cols = db.query("PRAGMA table_info(capabilities)").all() as { name: string }[];
+    const schemaNames = new Set(cols.map(c => c.name));
+    const colsSet = new Set<string>(COLS);
+    // Every name in COLS appears in the schema.
+    for (const c of COLS) {
+      expect(schemaNames.has(c)).toBe(true);
+    }
+    // Every schema column appears in COLS.
+    for (const name of schemaNames) {
+      expect(colsSet.has(name)).toBe(true);
+    }
   });
 });
 ```
 
+> **Drift detector test:** `COLS` and `schema.sql` are two declarations of the same set of columns — silent drift between them would corrupt every `applyRecords` call (writes the wrong column, reads return `undefined`). This test fails loudly the moment they diverge. Keep it in the integration suite, not the unit suite — it needs a real migrated DB.
+
 - [ ] **Step 2: Implement `src/inventory/indexer.ts`**
 
 ```typescript
+// Sole writer to the `capabilities` table. All mutations must go through
+// `applyRecords` to preserve diff semantics + FTS invariants. INSERT OR REPLACE
+// rewrites the row, so `rowid` changes on every update — never cache rowids
+// across `applyRecords` calls.
+
 import type { Database } from "bun:sqlite";
 import type { CapabilityRecord } from "./types.ts";
 
-const COLS = [
+export const COLS = [
   "id", "source_type", "name", "canonical_name", "description", "keywords",
   "installed", "enabled", "bundle_id", "bundle_version", "bundle_path",
   "source_url", "source_sha", "last_seen_epoch", "content_hash",
-];
+] as const satisfies readonly (keyof CapabilityRecord)[];
 
 export function applyRecords(db: Database, records: CapabilityRecord[]): void {
   db.transaction(() => {
@@ -1548,20 +1719,17 @@ export function applyRecords(db: Database, records: CapabilityRecord[]): void {
     const existing = db.query("SELECT id, content_hash FROM capabilities").all() as { id: string; content_hash: string }[];
     const existingMap = new Map(existing.map(e => [e.id, e.content_hash]));
 
-    // Delete rows no longer present
+    const del = db.prepare("DELETE FROM capabilities WHERE id = ?");
     for (const e of existing) {
-      if (!incomingIds.has(e.id)) {
-        db.query("DELETE FROM capabilities WHERE id = ?").run(e.id);
-      }
+      if (!incomingIds.has(e.id)) del.run(e.id);
     }
 
-    // Insert or update
     const placeholders = COLS.map(() => "?").join(",");
     const insertSql = `INSERT OR REPLACE INTO capabilities (${COLS.join(",")}) VALUES (${placeholders})`;
     const insert = db.prepare(insertSql);
     for (const r of records) {
-      if (existingMap.get(r.id) === r.content_hash) continue; // unchanged
-      insert.run(...COLS.map(c => (r as any)[c]));
+      if (existingMap.get(r.id) === r.content_hash) continue;
+      insert.run(...COLS.map(c => r[c]));
     }
   })();
 }
@@ -1571,10 +1739,19 @@ export function getAll(db: Database): CapabilityRecord[] {
 }
 ```
 
+> **`COLS` is exported, typed as `keyof CapabilityRecord`.** Two reasons:
+>
+> 1. Exporting lets the integration test compare `COLS` against the schema's `PRAGMA table_info` (drift detector above) without re-declaring the column list.
+> 2. `as const satisfies readonly (keyof CapabilityRecord)[]` makes TypeScript reject any column name that isn't a real field. Drops the `(r as any)[c]` cast — `r[c]` is now type-safe (`CapabilityRecord[typeof c]`).
+>
+> **Prepare DELETE outside the loop.** Re-preparing a statement per iteration in a `for...of` is needless overhead and obscures intent. Hoist both `insert` and `del` to one prepare per kind.
+>
+> **Single transaction.** Even a 4-statement delete-and-insert pass benefits from one tx — the FTS triggers fire inside it, and a mid-pass crash leaves the table consistent.
+
 - [ ] **Step 3: Run to verify pass**
 
 Run: `bun test tests/integration/indexer.test.ts`
-Expected: PASS — 4 tests pass
+Expected: PASS — 5 tests pass
 
 - [ ] **Step 4: Commit**
 
@@ -3098,12 +3275,11 @@ import { migrate } from "../db/migrate.ts";
 import { applyRecords } from "../inventory/indexer.ts";
 import { enumerateSkills } from "../inventory/enum-skills.ts";
 import { enumeratePlugins } from "../inventory/enum-plugins.ts";
-import { enumerateCommands } from "../inventory/enum-commands.ts";
-import { enumerateAgents } from "../inventory/enum-agents.ts";
+import { enumerateMdTree } from "../inventory/enum-md-tree.ts";
 import { enumerateMcp, type ToolsListFetcher } from "../inventory/enum-mcp.ts";
 import { enumerateCli } from "../inventory/enum-cli.ts";
 import { seedDefault } from "../trust/derive.ts";
-import { signatureHash } from "../inventory/hash.ts";
+import { signatureHash, defaultSignatureInputs } from "../inventory/hash.ts";
 import CLI_KNOWN from "../inventory/cli-known.json" with { type: "json" };
 
 export interface InitArgs {
@@ -3135,8 +3311,8 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
   const records = [
     ...enumerateSkills(join(args.claudeDir, "skills")),
     ...enumeratePlugins(join(args.claudeDir, "plugins/installed_plugins.json"), enabled),
-    ...enumerateCommands(join(args.claudeDir, "commands")),
-    ...enumerateAgents(join(args.claudeDir, "agents")),
+    ...enumerateMdTree(join(args.claudeDir, "commands"), "command"),
+    ...enumerateMdTree(join(args.claudeDir, "agents"), "agent"),
     ...enumerateCli(CLI_KNOWN as any, loadCliExtras(args.dataDir)),
   ];
 
@@ -3153,15 +3329,7 @@ export async function runInit(args: InitArgs): Promise<InitResult> {
   applyRecords(db, records);
   db.close();
 
-  const inputs = [
-    join(args.claudeDir, "plugins/installed_plugins.json"),
-    join(args.claudeDir, "settings.json"),
-    args.claudeJson,
-    join(args.claudeDir, "skills"),
-    join(args.claudeDir, "commands"),
-    join(args.dataDir, "cli-extras.json"),
-  ];
-  writeFileSync(hashPath, signatureHash(inputs));
+  writeFileSync(hashPath, signatureHash(defaultSignatureInputs()));
   return { ok: true, counts: countBySource(records), problems };
 }
 
