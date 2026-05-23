@@ -28,6 +28,7 @@ export function loadTrust(path: string): TrustConfig {
       blocked_patterns: obj.blocked_patterns ?? [],
     };
   } catch {
+    console.warn("[quartermaster] trust.json is malformed; treating as empty");
     return { version: 1, trusted_patterns: [], blocked_patterns: [] };
   }
 }

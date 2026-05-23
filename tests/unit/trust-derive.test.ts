@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadTrust, trustLevel } from "../../src/trust/derive";
+import { loadTrust, seedDefault, trustLevel } from "../../src/trust/derive";
 
 let tmp: string;
 
@@ -40,4 +40,31 @@ describe("trustLevel", () => {
     expect(trustLevel("https://github.com/foo/bar", c2)).toBe("blocked");
   });
   test("null url → unknown", () => { expect(trustLevel(null, cfg)).toBe("unknown"); });
+  test("trailing slash on URL still matches", () => {
+    expect(trustLevel("https://github.com/anthropic/foo/", cfg)).toBe("trusted");
+  });
+  test(".git suffix matches", () => {
+    expect(trustLevel("https://github.com/anthropic/foo.git", cfg)).toBe("trusted");
+  });
+  test("ssh remote form matches", () => {
+    expect(trustLevel("git@github.com:anthropic/foo.git", cfg)).toBe("trusted");
+  });
+});
+
+describe("seedDefault", () => {
+  test("writes default trust config to absent file", () => {
+    const p = join(tmp, "trust.json");
+    seedDefault(p);
+    const loaded = loadTrust(p);
+    expect(loaded.trusted_patterns).toContain("anthropic/*");
+    expect(loaded.blocked_patterns).toEqual([]);
+  });
+
+  test("is idempotent — second call does not overwrite", () => {
+    const p = join(tmp, "trust.json");
+    seedDefault(p);
+    writeFileSync(p, JSON.stringify({ version: 1, trusted_patterns: ["custom/*"], blocked_patterns: [] }));
+    seedDefault(p);
+    expect(loadTrust(p).trusted_patterns).toEqual(["custom/*"]);
+  });
 });

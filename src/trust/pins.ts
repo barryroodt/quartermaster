@@ -1,9 +1,13 @@
+// Cold-path table: one write per install, one read per drift check.
+// Statements are not prepared-once (cf. indexer.ts); the per-call query cost
+// is negligible at this volume and keeps the module flat.
+
 import type { Database } from "bun:sqlite";
 
 export interface PinRow {
   capability_id: string;
   source_sha: string;
-  pinned_by: "auto-trusted" | "user-confirm" | "pre-existing";
+  pinned_by: "auto-trusted" | "user-confirm";
   source_url: string;
 }
 
