@@ -29,7 +29,7 @@ async function main() {
         enabledPlugins: await loadEnabledPlugins(),
       };
       if (Object.keys(args.mcpServers).length > 0) {
-        console.warn("[quartermaster] MCP fetcher not wired in v0.1 — mcp_tool enumeration disabled");
+        console.warn("[quartermaster] mcp_server indexing active; mcp_tool enumeration deferred to ToolSearch (spec §22)");
       }
       const r = await runInit(args);
       console.log(`[quartermaster] init: ${JSON.stringify(r.counts)}`);
