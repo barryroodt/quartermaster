@@ -65,7 +65,10 @@ async function main() {
     }
     case "trust": {
       const action = rest[0];
-      if (action === "add") runTrustAdd(paths.trustJson, rest[1]);
+      if (action === "add") {
+        if (!rest[1]) { console.error("usage: /qm trust add <pattern>"); process.exit(2); }
+        runTrustAdd(paths.trustJson, rest[1]);
+      }
       else if (action === "list") console.log(JSON.stringify(runTrustList(paths.trustJson), null, 2));
       else { console.error("usage: /qm trust add <pattern> | list"); process.exit(2); }
       break;
