@@ -36,6 +36,16 @@ export function printSurvey(r: SurveyResult): void {
     console.log(`  ${row.name} (${row.source_type}, ${row.trust_level}) — ${row.description?.slice(0, DESC_TRUNC) ?? ""}`);
   }
   if (r.degraded) console.log("\n⚠ matching degraded (no semantic rerank)");
+  if (r.external_gaps.length > 0) {
+    console.log("\nGAP CANDIDATES (external):");
+    for (const g of r.external_gaps) {
+      console.log(`  ${g.name} (${g.registry}) — ${g.description.slice(0, DESC_TRUNC)}`);
+      console.log(`    install: ${g.install_command}`);
+    }
+  }
+  // Text-only handoff — see docs/v0.2-roadmap.md for why EnterPlanMode
+  // can't be invoked from a Bun subprocess.
+  console.log(`\n[quartermaster] next: /plan "<your goal>"  # use surfaced capabilities during planning`);
 }
 
 export function printCapability(r: CapabilityRecord): void {
