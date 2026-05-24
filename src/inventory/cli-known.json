@@ -1,0 +1,23 @@
+{
+  "gh": { "description": "GitHub CLI", "registry": "brew" },
+  "git": { "description": "Git version control", "registry": "system" },
+  "docker": { "description": "Container runtime", "registry": "brew" },
+  "kubectl": { "description": "Kubernetes control CLI", "registry": "brew" },
+  "terraform": { "description": "Infrastructure as code", "registry": "brew" },
+  "aws": { "description": "AWS CLI", "registry": "brew" },
+  "gcloud": { "description": "Google Cloud CLI", "registry": "brew" },
+  "psql": { "description": "PostgreSQL client", "registry": "brew" },
+  "redis-cli": { "description": "Redis client", "registry": "brew" },
+  "jq": { "description": "JSON processor", "registry": "brew" },
+  "rg": { "description": "ripgrep — fast recursive search", "registry": "brew" },
+  "fd": { "description": "Fast find alternative", "registry": "brew" },
+  "fzf": { "description": "Fuzzy finder", "registry": "brew" },
+  "curl": { "description": "HTTP client", "registry": "system" },
+  "node": { "description": "Node.js runtime", "registry": "brew" },
+  "bun": { "description": "Bun runtime/package manager", "registry": "brew" },
+  "npm": { "description": "Node package manager", "registry": "brew" },
+  "pnpm": { "description": "Performant npm", "registry": "brew" },
+  "python3": { "description": "Python 3 interpreter", "registry": "brew" },
+  "pip": { "description": "Python package installer", "registry": "brew" },
+  "cargo": { "description": "Rust package manager", "registry": "brew" }
+}

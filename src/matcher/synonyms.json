@@ -1,0 +1,14 @@
+{
+  "k8s": ["kubernetes"],
+  "pg": ["postgres", "postgresql"],
+  "ts": ["typescript"],
+  "js": ["javascript"],
+  "py": ["python"],
+  "rb": ["ruby"],
+  "go": ["golang"],
+  "rs": ["rust"],
+  "ci": ["pipeline", "build"],
+  "cd": ["deploy", "deployment"],
+  "auth": ["authentication", "authorization", "oauth"],
+  "db": ["database"]
+}

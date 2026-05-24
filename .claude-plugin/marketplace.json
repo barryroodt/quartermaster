@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "name": "quartermaster",
+      "source": {
+        "source": "github",
+        "repo": "<owner>/quartermaster"
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+[
+  "^(plan|design|brainstorm|build|implement|create|set up)\\b",
+  "\\b(want to|going to|need to|trying to|let['']?s) (plan|design|brainstorm|build|implement|create|set up)\\b",
+  "\\bhow (would|should|do) (i|we|you)\\b",
+  "\\bwhat['']?s? the best way to\\b",
+  "\\b(approach|strategy|architecture) for\\b"
+]

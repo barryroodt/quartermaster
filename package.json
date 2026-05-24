@@ -1,0 +1,19 @@
+{
+  "name": "quartermaster",
+  "version": "0.1.0",
+  "description": "Claude Code discovery plugin — surveys skills/plugins/MCPs/CLIs and surfaces what's relevant before planning",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.4.0"
+  }
+}
