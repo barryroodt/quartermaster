@@ -4,12 +4,19 @@ A Claude Code plugin that surveys what your agent actually has available — ski
 
 ## Install
 
-```
+```bash
+# 1. Add marketplace + install plugin
 claude plugin marketplace add <owner>/quartermaster
 claude plugin install quartermaster
+
+# 2. Install runtime deps (required — @anthropic-ai/sdk is not bundled)
 bun install --cwd ~/.claude/plugins/cache/quartermaster
+
+# 3. Build inventory
 bun ~/.claude/plugins/cache/quartermaster/src/cli.ts init
 ```
+
+Step 2 is required even on initial install — Claude Code's plugin install does not run `bun install` in the plugin cache.
 
 ## Use
 
