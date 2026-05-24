@@ -1,16 +1,14 @@
 import { runHook } from "./prompt-hook.ts";
+import { defaultSignatureInputs } from "../inventory/hash.ts";
 
 const HOOK_BUDGET_MS = 80; // UserPromptSubmit informal budget; verify against Claude Code docs
 
 const HOME = process.env.HOME ?? "";
 const dataDir = `${HOME}/.quartermaster`;
 const promptText = await Bun.stdin.text();
-const hashInputPaths = [
-  `${HOME}/.claude/plugins/installed_plugins.json`,
-  `${HOME}/.claude/settings.json`,
-  `${HOME}/.claude.json`,
-  `${HOME}/.claude/skills`,
-];
+// Must mirror init's defaultSignatureInputs() exactly — any drift makes the
+// post-init hash always differ from stored, firing a permanent stale warn.
+const hashInputPaths = defaultSignatureInputs();
 
 const t0 = performance.now();
 try {
