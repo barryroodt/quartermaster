@@ -1,12 +1,17 @@
 {
-  "version": 1,
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "quartermaster",
+  "description": "Discovery plugin — surveys skills, plugins, MCP servers, MCP tools, and curated CLIs; surfaces what's relevant before planning.",
+  "owner": {
+    "name": "Barry Roodt",
+    "url": "https://github.com/barryroodt"
+  },
   "plugins": [
     {
       "name": "quartermaster",
-      "source": {
-        "source": "github",
-        "repo": "<owner>/quartermaster"
-      }
+      "description": "FTS5 + Claude rerank discovery. Trust allowlist with SHA pins. Gap-search via skills.sh + brew + smithery.",
+      "source": "./",
+      "category": "productivity"
     }
   ]
 }
