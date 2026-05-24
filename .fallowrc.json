@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "src/cli.ts",
+    "src/hooks/prompt-hook-cli.ts",
+    "tests/**/*.test.ts"
+  ],
+  "ignorePatterns": [
+    "tests/fixtures/**"
+  ]
+}
