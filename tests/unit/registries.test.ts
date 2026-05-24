@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   parseSkillsShOutput,
   parseBrewOutput,
+  interpretBrewExit,
   type RegistryHit,
 } from "../../src/gap-search/registries";
 
@@ -62,5 +63,27 @@ baz`;
     expect(hits.length).toBe(10);
     expect(hits[0].name).toBe("pkg0");
     expect(hits[9].name).toBe("pkg9");
+  });
+});
+
+describe("interpretBrewExit", () => {
+  test("no-match exit treated as empty result, not error", () => {
+    expect(
+      interpretBrewExit(1, 'Error: No formulae or casks found for "x".'),
+    ).toEqual({ isNoMatch: true, isError: false });
+  });
+
+  test("real failure flagged as error", () => {
+    expect(interpretBrewExit(1, "permission denied")).toEqual({
+      isNoMatch: false,
+      isError: true,
+    });
+  });
+
+  test("clean exit is neither no-match nor error", () => {
+    expect(interpretBrewExit(0, "")).toEqual({
+      isNoMatch: false,
+      isError: false,
+    });
   });
 });

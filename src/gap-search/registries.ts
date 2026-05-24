@@ -76,12 +76,23 @@ export async function searchSkillsSh(query: string): Promise<RegistryHit[]> {
   return parseSkillsShOutput(stdout);
 }
 
+export function interpretBrewExit(
+  exitCode: number,
+  stderr: string,
+): { isNoMatch: boolean; isError: boolean } {
+  const isNoMatch = /No formulae or casks found/.test(stderr);
+  if (isNoMatch) return { isNoMatch: true, isError: false };
+  if (exitCode !== 0) return { isNoMatch: false, isError: true };
+  return { isNoMatch: false, isError: false };
+}
+
 export async function searchBrew(query: string): Promise<RegistryHit[]> {
   const result = await $`brew search ${query}`.quiet().nothrow();
   const stdout = result.stdout.toString();
   const stderr = result.stderr.toString();
-  if (result.exitCode !== 0 && !(stderr === "" && stdout === "")) {
+  const { isNoMatch, isError } = interpretBrewExit(result.exitCode, stderr);
+  if (isError && !(stderr === "" && stdout === "")) {
     throw new RegistrySearchFailed("brew", result.exitCode, stderr);
   }
-  return parseBrewOutput(stdout);
+  return isNoMatch ? [] : parseBrewOutput(stdout);
 }
